@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QPushButton,
 )
-
 from PySide6.QtCore import Qt
 
 from network.server_config import load_server_config
@@ -978,16 +977,42 @@ class MainWindow(QMainWindow):
 
     def load_file_messages(self, contact):
 
-        messages = self.file_messages.get(contact, [])
+        from database.db import get_media_conversation
+
+        messages = get_media_conversation(self.username, contact)
+
+        shared_key = self.network_client.get_shared_key(contact)
+
+        if not shared_key:
+            return
 
         for message in messages:
+            try:
+                file_id = str(message["id"])
+                ciphertext = message["ciphertext"]
 
-            self.chat_widget.add_file_message(
-                message["file_id"],
-                message["file_name"],
-                message["file_size"],
-                outgoing=message["outgoing"]
-            )
+                file_name, file_data = FileEncryption.decrypt_file(
+                    ciphertext,
+                    shared_key
+                )
+
+                self.pending_downloads[file_id] = {
+                    "sender": message["sender"],
+                    "recipient": message["recipient"],
+                    "file_name": file_name,
+                }
+
+                outgoing = message["sender"] == self.username
+
+                self.chat_widget.add_file_message(
+                    file_id,
+                    file_name,
+                    len(file_data),
+                    outgoing=outgoing
+                )
+
+            except Exception as e:
+                print(f"Gagal memuat file {message.get('id')}: {e}")
 
     # ==================================
     # MESSAGE SENDING
