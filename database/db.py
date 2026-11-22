@@ -61,28 +61,32 @@ def init_db():
             )
         """)
 
-        # Migrasi: tambah kolom role dan is_active jika tabel sudah ada
-        try:
+        # Migrasi kolom users
+        existing_user_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(users)"
+            ).fetchall()
+        }
 
-            connection.execute(
-                "ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'"
-            )
+        if "role" not in existing_user_columns:
 
-        except sqlite3.OperationalError:
+            connection.execute("""
+                ALTER TABLE users
+                ADD COLUMN role TEXT DEFAULT 'user'
+            """)
 
-            pass
+        if "is_active" not in existing_user_columns:
 
-        try:
+            connection.execute("""
+                ALTER TABLE users
+                ADD COLUMN is_active INTEGER DEFAULT 1
+            """)
 
-            connection.execute(
-                "ALTER TABLE users ADD COLUMN is_active INTEGER DEFAULT 1"
-            )
+        # ==================================
+        # TEXT MESSAGES
+        # ==================================
 
-        except sqlite3.OperationalError:
-
-            pass
-
-        # Tabel pesan
         connection.execute("""
             CREATE TABLE IF NOT EXISTS messages (
 
@@ -99,13 +103,11 @@ def init_db():
             )
         """)
 
-        # Index untuk mempercepat pencarian percakapan
         connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_messages_conversation
             ON messages (sender, recipient, id)
         """)
 
-                # Hapus duplikasi lama, pertahankan ID terkecil
         connection.execute("""
             DELETE FROM messages
             WHERE id NOT IN (
@@ -115,10 +117,36 @@ def init_db():
             )
         """)
 
-        # Cegah duplikasi secara permanen di database
         connection.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_unique
             ON messages (sender, recipient, ciphertext)
+        """)
+
+        # ==================================
+        # MEDIA MESSAGES
+        # ==================================
+
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS media_messages (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                sender TEXT NOT NULL,
+
+                recipient TEXT NOT NULL,
+
+                filename TEXT NOT NULL,
+
+                ciphertext TEXT NOT NULL,
+
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+
+            )
+        """)
+
+        connection.execute("""
+            CREATE INDEX IF NOT EXISTS idx_media_conversation
+            ON media_messages (sender, recipient, id)
         """)
 
         connection.commit()
@@ -179,7 +207,6 @@ def create_user(username, password, role="user"):
                     password_salt,
                     role
                 )
-
                 VALUES (?, ?, ?, ?)
             """, (
                 username,
@@ -223,6 +250,9 @@ def authenticate_user(username, password):
         """, (username,)).fetchone()
 
     if row is None:
+        return None
+
+    if not row["is_active"]:
         return None
 
     calculated_hash, _ = hash_password(
@@ -297,7 +327,6 @@ def save_message(sender, recipient, ciphertext):
         return row["id"]
 
 
-
 # ==================================
 # GET CONVERSATION HISTORY
 # ==================================
@@ -341,7 +370,103 @@ def get_conversation(username, contact, limit=200):
             limit
         )).fetchall()
 
-    # Balikkan agar pesan ditampilkan dari yang paling lama
+    return [
+        dict(row)
+        for row in reversed(rows)
+    ]
+
+
+# ==================================
+# SAVE ENCRYPTED MEDIA
+# ==================================
+
+def save_media_message(sender, recipient, filename, ciphertext):
+
+    if not isinstance(sender, str) or not sender.strip():
+        raise ValueError("Invalid sender.")
+
+    if not isinstance(recipient, str) or not recipient.strip():
+        raise ValueError("Invalid recipient.")
+
+    if not isinstance(filename, str) or not filename.strip():
+        raise ValueError("Invalid filename.")
+
+    if not isinstance(ciphertext, str):
+        raise TypeError("Ciphertext must be a string.")
+
+    if not ciphertext.startswith("SF1:"):
+        raise ValueError("Invalid encrypted file format.")
+
+    sender = sender.strip()
+    recipient = recipient.strip()
+    filename = Path(filename).name
+
+    with get_connection() as connection:
+
+        cursor = connection.execute("""
+            INSERT INTO media_messages (
+                sender,
+                recipient,
+                filename,
+                ciphertext
+            )
+            VALUES (?, ?, ?, ?)
+        """, (
+            sender,
+            recipient,
+            filename,
+            ciphertext
+        ))
+
+        connection.commit()
+
+        return cursor.lastrowid
+
+
+# ==================================
+# GET MEDIA CONVERSATION
+# ==================================
+
+def get_media_conversation(username, contact, limit=200):
+
+    if not isinstance(limit, int) or limit < 1:
+        raise ValueError("Limit must be a positive integer.")
+
+    with get_connection() as connection:
+
+        rows = connection.execute("""
+            SELECT
+                id,
+                sender,
+                recipient,
+                filename,
+                ciphertext,
+                created_at
+
+            FROM media_messages
+
+            WHERE
+                (
+                    sender = ?
+                    AND recipient = ?
+                )
+                OR
+                (
+                    sender = ?
+                    AND recipient = ?
+                )
+
+            ORDER BY id DESC
+
+            LIMIT ?
+        """, (
+            username,
+            contact,
+            contact,
+            username,
+            limit
+        )).fetchall()
+
     return [
         dict(row)
         for row in reversed(rows)
