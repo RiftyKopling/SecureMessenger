@@ -359,7 +359,7 @@ class MainWindow(QMainWindow):
 
             admin_button_layout = QHBoxLayout()
 
-            self.btn_toggle_active = QPushButton("Nonaktifkan / Aktifkan")
+            self.btn_toggle_active = QPushButton("Nonaktifkan")
             self.btn_toggle_active.setFixedHeight(36)
             self.btn_toggle_active.clicked.connect(
                 self.toggle_user_active
