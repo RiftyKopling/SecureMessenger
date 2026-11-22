@@ -40,6 +40,7 @@ def init_db():
 
     with get_connection() as connection:
 
+        # Tabel pengguna
         connection.execute("""
             CREATE TABLE IF NOT EXISTS users (
 
@@ -54,6 +55,45 @@ def init_db():
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 
             )
+        """)
+
+        # Tabel pesan
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                sender TEXT NOT NULL,
+
+                recipient TEXT NOT NULL,
+
+                ciphertext TEXT NOT NULL,
+
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+
+            )
+        """)
+
+        # Index untuk mempercepat pencarian percakapan
+        connection.execute("""
+            CREATE INDEX IF NOT EXISTS idx_messages_conversation
+            ON messages (sender, recipient, id)
+        """)
+
+                # Hapus duplikasi lama, pertahankan ID terkecil
+        connection.execute("""
+            DELETE FROM messages
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM messages
+                GROUP BY sender, recipient, ciphertext
+            )
+        """)
+
+        # Cegah duplikasi secara permanen di database
+        connection.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_unique
+            ON messages (sender, recipient, ciphertext)
         """)
 
         connection.commit()
@@ -169,3 +209,148 @@ def authenticate_user(username, password):
         username=row["username"],
         created_at=row["created_at"]
     )
+
+
+# ==================================
+# SAVE ENCRYPTED MESSAGE
+# ==================================
+
+def save_message(sender, recipient, ciphertext):
+
+    if not isinstance(sender, str) or not sender.strip():
+        raise ValueError("Invalid sender.")
+
+    if not isinstance(recipient, str) or not recipient.strip():
+        raise ValueError("Invalid recipient.")
+
+    if not isinstance(ciphertext, str):
+        raise TypeError("Ciphertext must be a string.")
+
+    if not ciphertext.startswith("SM2:"):
+        raise ValueError("Invalid encrypted message format.")
+
+    sender = sender.strip()
+    recipient = recipient.strip()
+
+    with get_connection() as connection:
+
+        connection.execute("""
+            INSERT OR IGNORE INTO messages (
+                sender,
+                recipient,
+                ciphertext
+            )
+            VALUES (?, ?, ?)
+        """, (
+            sender,
+            recipient,
+            ciphertext
+        ))
+
+        row = connection.execute("""
+            SELECT id
+            FROM messages
+            WHERE sender = ?
+            AND recipient = ?
+            AND ciphertext = ?
+            LIMIT 1
+        """, (
+            sender,
+            recipient,
+            ciphertext
+        )).fetchone()
+
+        return row["id"]
+
+
+
+# ==================================
+# GET CONVERSATION HISTORY
+# ==================================
+
+def get_conversation(username, contact, limit=200):
+
+    if not isinstance(limit, int) or limit < 1:
+        raise ValueError("Limit must be a positive integer.")
+
+    with get_connection() as connection:
+
+        rows = connection.execute("""
+            SELECT
+                id,
+                sender,
+                recipient,
+                ciphertext,
+                created_at
+
+            FROM messages
+
+            WHERE
+                (
+                    sender = ?
+                    AND recipient = ?
+                )
+                OR
+                (
+                    sender = ?
+                    AND recipient = ?
+                )
+
+            ORDER BY id DESC
+
+            LIMIT ?
+        """, (
+            username,
+            contact,
+            contact,
+            username,
+            limit
+        )).fetchall()
+
+    # Balikkan agar pesan ditampilkan dari yang paling lama
+    return [
+        dict(row)
+        for row in reversed(rows)
+    ]
+
+
+# ==================================
+# GET LATEST MESSAGE
+# ==================================
+
+def get_latest_message(username, contact):
+
+    with get_connection() as connection:
+
+        row = connection.execute("""
+            SELECT
+                id,
+                sender,
+                recipient,
+                ciphertext,
+                created_at
+
+            FROM messages
+
+            WHERE
+                (
+                    sender = ?
+                    AND recipient = ?
+                )
+                OR
+                (
+                    sender = ?
+                    AND recipient = ?
+                )
+
+            ORDER BY id DESC
+
+            LIMIT 1
+        """, (
+            username,
+            contact,
+            contact,
+            username
+        )).fetchone()
+
+    return dict(row) if row else None

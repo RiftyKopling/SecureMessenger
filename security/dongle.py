@@ -312,3 +312,62 @@ def update_display_name(display_name):
     )
 
     return True
+
+
+def get_dongle_secret():
+
+    if not CONFIG_PATH.exists():
+        raise RuntimeError(
+            "Konfigurasi USB Dongle belum tersedia."
+        )
+
+    try:
+
+        config = json.loads(
+            CONFIG_PATH.read_text(encoding="utf-8")
+        )
+
+        expected_serial = config["volume_serial"]
+        expected_hash = config["key_sha256"]
+        key_filename = config["key_filename"]
+
+    except (OSError, ValueError, KeyError, TypeError):
+
+        raise RuntimeError(
+            "Konfigurasi USB Dongle tidak valid."
+        )
+
+    for drive in get_removable_drives():
+
+        if drive["serial"] != expected_serial:
+            continue
+
+        key_path = Path(drive["root"]) / key_filename
+
+        if not key_path.is_file():
+            continue
+
+        try:
+            secret_key = key_path.read_bytes()
+        except OSError:
+            continue
+
+        actual_hash = hashlib.sha256(
+            secret_key
+        ).hexdigest()
+
+        if secrets.compare_digest(
+            actual_hash,
+            expected_hash
+        ):
+
+            if len(secret_key) != 32:
+                raise RuntimeError(
+                    "Panjang rahasia USB Dongle tidak valid."
+                )
+
+            return secret_key
+
+    raise RuntimeError(
+        "USB Dongle tidak ditemukan atau tidak valid."
+    )

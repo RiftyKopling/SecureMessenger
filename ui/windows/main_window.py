@@ -9,9 +9,13 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QFrame,
+    QMessageBox,
 )
 from PySide6.QtCore import Qt
-
+from network.server_config import load_server_config
+from security.encryption import TextEncryption
+from network.client import MessengerClient
+from database.db import save_message, get_conversation
 from ui.widgets.chat_widget import ChatWidget
 
 
@@ -21,6 +25,57 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.username = username
+        self.text_encryption = TextEncryption()
+
+        # Penyimpanan sementara pesan
+        self.encrypted_messages = []
+        self.received_messages = []
+
+        # Network client
+        self.network_client = MessengerClient(
+            self,
+            username=self.username
+        )
+
+        # ==================================
+        # NETWORK SIGNALS
+        # ==================================
+
+        self.network_client.users_updated.connect(
+            self.handle_users_updated
+        )
+
+        self.network_client.connected.connect(
+            self.handle_connected
+        )
+
+        self.network_client.registered.connect(
+            self.handle_registered
+        )
+
+        self.network_client.message_received.connect(
+            self.handle_message_received
+        )
+
+        self.network_client.message_sent.connect(
+            self.handle_message_delivered
+        )
+
+        self.network_client.error_occurred.connect(
+            self.handle_network_error
+        )
+
+        self.network_client.disconnected.connect(
+            self.handle_disconnected
+        )
+
+        self.network_client.key_established.connect(
+            self.handle_key_established
+        )
+
+        # ==================================
+        # WINDOW
+        # ==================================
 
         self.setWindowTitle("Secure Messenger")
         self.resize(1250, 800)
@@ -28,6 +83,139 @@ class MainWindow(QMainWindow):
 
         self.init_ui()
         self.load_contacts()
+
+        # Hubungkan ke server
+        self.connect_to_server()
+
+    # ==================================
+    # NETWORK CONNECTION
+    # ==================================
+
+    def connect_to_server(self):
+
+        try:
+
+            host, port = load_server_config()
+
+            print(f"[NETWORK] Connecting to {host}:{port}")
+
+            success = self.network_client.connect_to_server(
+                host=host,
+                port=port,
+                username=self.username
+            )
+
+            if not success:
+
+                print("[NETWORK] Failed to connect to server.")
+
+        except Exception as error:
+
+            QMessageBox.critical(
+                self,
+                "Connection Error",
+                f"Gagal terhubung ke server:\n{error}"
+            )
+
+    def handle_connected(self):
+
+        print(
+            f"[NETWORK] {self.username} connected to server"
+        )
+
+        self.connection_status_label.setText(
+            "●  Connected to server"
+        )
+
+    def handle_registered(self, username):
+
+        print(
+            f"[NETWORK] Registered as {username}"
+        )
+
+        self.connection_status_label.setText(
+            "●  Online"
+        )
+
+        self.update_contact_status()
+
+    def handle_disconnected(self):
+
+        print("[NETWORK] Disconnected from server")
+
+        self.connection_status_label.setText(
+            "●  Disconnected"
+        )
+
+        self.chat_widget.contact_status.setText(
+            "●  Server disconnected"
+        )
+
+    def handle_network_error(self, error):
+
+        print("[NETWORK ERROR]", error)
+
+        self.connection_status_label.setText(
+            "●  Connection error"
+        )
+
+        QMessageBox.warning(
+            self,
+            "Network Error",
+            str(error)
+        )
+
+    # ==================================
+    # KEY EXCHANGE
+    # ==================================
+
+    def handle_key_established(self, username):
+
+        print(
+            f"[KEY EXCHANGE] Shared key established with {username}"
+        )
+
+        if username == self.chat_widget.current_contact:
+
+            self.update_contact_status()
+
+            # Muat ulang percakapan setelah kunci tersedia
+            self.load_conversation_history(username)
+
+    def update_contact_status(self):
+
+        recipient = self.chat_widget.current_contact
+
+        if not recipient:
+            return
+
+        if not self.network_client.running:
+
+            self.chat_widget.contact_status.setText(
+                "●  Server disconnected"
+            )
+
+            return
+
+        shared_key = self.network_client.get_shared_key(
+            recipient
+        )
+
+        if shared_key is not None:
+
+            self.chat_widget.contact_status.setText(
+                "●  Encrypted connection established"
+            )
+
+        else:
+
+            self.chat_widget.contact_status.setText(
+                "●  Waiting for key exchange..."
+            )
+
+    # ==================================
+    # USER INTERFACE
+    # ==================================
 
     def init_ui(self):
 
@@ -51,16 +239,12 @@ class MainWindow(QMainWindow):
         sidebar_layout.setContentsMargins(20, 25, 20, 20)
         sidebar_layout.setSpacing(15)
 
-        # Branding
-
         brand = QLabel("⬡  SECURE MESSENGER")
         brand.setObjectName("brand")
-
         sidebar_layout.addWidget(brand)
 
         subtitle = QLabel("Private communication")
         subtitle.setObjectName("sidebarSubtitle")
-
         sidebar_layout.addWidget(subtitle)
 
         # Profile
@@ -79,11 +263,15 @@ class MainWindow(QMainWindow):
         username_label = QLabel(self.username)
         username_label.setObjectName("profileName")
 
-        status_label = QLabel("●  Online")
-        status_label.setObjectName("onlineStatus")
+        self.connection_status_label = QLabel(
+            "●  Connecting..."
+        )
+        self.connection_status_label.setObjectName(
+            "onlineStatus"
+        )
 
         profile_info.addWidget(username_label)
-        profile_info.addWidget(status_label)
+        profile_info.addWidget(self.connection_status_label)
 
         profile_layout.addWidget(avatar)
         profile_layout.addLayout(profile_info)
@@ -274,17 +462,29 @@ class MainWindow(QMainWindow):
 
     def load_contacts(self):
 
-        contacts = [
-            "Alice",
-            "Bob",
-            "Charlie",
-            "David",
-            "Emily",
-        ]
+        self.contact_list.clear()
 
-        for name in contacts:
 
-            item = QListWidgetItem(f"●   {name}")
+    def handle_users_updated(self, users):
+
+        current_contact = self.chat_widget.current_contact
+
+        self.contact_list.blockSignals(True)
+
+        self.contact_list.clear()
+
+        selected_item = None
+
+        for name in users:
+
+            # Jangan tampilkan username sendiri
+            if name.casefold() == self.username.casefold():
+                continue
+
+            item = QListWidgetItem(
+                f"●   {name}"
+            )
+
             item.setData(
                 Qt.ItemDataRole.UserRole,
                 name
@@ -292,7 +492,33 @@ class MainWindow(QMainWindow):
 
             self.contact_list.addItem(item)
 
-        self.contact_list.setCurrentRow(0)
+            # Pertahankan kontak yang sedang dibuka
+            if (
+                current_contact
+                and name.casefold() == current_contact.casefold()
+            ):
+                selected_item = item
+
+        self.contact_list.blockSignals(False)
+
+        # Jika kontak yang sebelumnya dibuka masih online,
+        # pertahankan percakapannya.
+        if selected_item is not None:
+
+            self.contact_list.setCurrentItem(selected_item)
+
+        elif self.contact_list.count() > 0:
+
+            self.contact_list.setCurrentRow(0)
+
+        else:
+
+            self.chat_widget.set_contact(None)
+            self.chat_widget.clear_messages()
+            self.chat_widget.add_message(
+                "Belum ada pengguna lain yang online.",
+                outgoing=False
+            )
 
     def filter_contacts(self, text):
 
@@ -319,14 +545,303 @@ class MainWindow(QMainWindow):
 
         self.chat_widget.set_contact(name)
 
+        self.update_contact_status()
+
+        # Ambil riwayat percakapan dari SQLite
+        self.load_conversation_history(name)
+
     # ==================================
-    # MESSAGE EVENT
+    # LOAD CONVERSATION HISTORY
     # ==================================
 
-    def handle_message_sent(self, text):
+    def load_conversation_history(self, contact):
+
+        try:
+
+            messages = get_conversation(
+                self.username,
+                contact
+            )
+
+            # Bersihkan tampilan chat sebelumnya
+            self.chat_widget.clear_messages()
+
+            if not messages:
+
+                self.chat_widget.add_message(
+                    f"Percakapan dengan {contact} dimulai.",
+                    outgoing=False
+                )
+
+                return
+
+            shared_key = self.network_client.get_shared_key(
+                contact
+            )
+
+            if shared_key is None:
+
+                self.chat_widget.add_message(
+                    "Menunggu pertukaran kunci untuk membuka riwayat pesan.",
+                    outgoing=False
+                )
+
+                return
+
+            for message in messages:
+
+                try:
+
+                    plaintext = self.text_encryption.decrypt(
+                        message["ciphertext"],
+                        shared_key
+                    )
+
+                    outgoing = (
+                        message["sender"] == self.username
+                    )
+
+                    self.chat_widget.add_message(
+                        plaintext,
+                        outgoing=outgoing
+                    )
+
+                except Exception as error:
+
+                    print(
+                        f"[HISTORY DECRYPTION ERROR] "
+                        f"Message ID {message['id']}: {error}"
+                    )
+
+                    self.chat_widget.add_message(
+                        "[Pesan tidak dapat didekripsi]",
+                        outgoing=(
+                            message["sender"] == self.username
+                        )
+                    )
+
+        except Exception as error:
+
+            print("[DATABASE ERROR]", error)
+
+            QMessageBox.warning(
+                self,
+                "Database Error",
+                f"Gagal memuat riwayat percakapan:\n{error}"
+            )
+
+    # ==================================
+    # MESSAGE SENDING
+    # ==================================
+
+    def handle_message_sent(self, message):
+
+        recipient = self.chat_widget.current_contact
+
+        if not recipient:
+            return
+
+        try:
+
+            # Pastikan koneksi aktif
+            if not self.network_client.running:
+                raise ConnectionError(
+                    "Belum terhubung ke server."
+                )
+
+            # Ambil shared key
+            shared_key = self.network_client.get_shared_key(
+                recipient
+            )
+
+            if shared_key is None:
+
+                raise ConnectionError(
+                    f"Shared key dengan {recipient} "
+                    "belum tersedia. Tunggu pertukaran kunci selesai."
+                )
+
+            # Enkripsi pesan
+            encrypted_message = self.text_encryption.encrypt(
+                message,
+                shared_key
+            )
+
+            # Kirim ciphertext ke server
+            success = self.network_client.send_message(
+                recipient,
+                encrypted_message
+            )
+
+            if not success:
+                raise ConnectionError(
+                    "Server gagal menerima pesan."
+                )
+
+            # Simpan sementara
+            self.encrypted_messages.append({
+                "sender": self.username,
+                "recipient": recipient,
+                "ciphertext": encrypted_message,
+            })
+
+            # Simpan ciphertext ke database lokal
+            try:
+
+                save_message(
+                    self.username,
+                    recipient,
+                    encrypted_message
+                )
+
+                print(
+                    "[DATABASE] Outgoing message saved."
+                )
+
+            except Exception as database_error:
+
+                print(
+                    "[DATABASE ERROR]",
+                    database_error
+                )
+
+                QMessageBox.warning(
+                    self,
+                    "Storage Warning",
+                    "Pesan sudah dikirim ke server, "
+                    "tetapi gagal disimpan ke database."
+                )
+
+            print("\n========== SECURE MESSAGE ==========")
+            print(f"Sender    : {self.username}")
+            print(f"Recipient : {recipient}")
+            print(f"Original  : {message}")
+            print(f"Ciphertext: {encrypted_message}")
+            print("Status    : Encrypted and sent")
+            print("====================================\n")
+
+        except Exception as error:
+
+            QMessageBox.warning(
+                self,
+                "Message Error",
+                f"Gagal mengirim pesan:\n{error}"
+            )
+
+    # ==================================
+    # MESSAGE RECEIVING
+    # ==================================
+
+    def handle_message_received(self, sender, ciphertext):
+
+        print("\n========== INCOMING MESSAGE ==========")
+        print(f"Sender    : {sender}")
+        print(f"Ciphertext: {ciphertext}")
+        print("======================================\n")
+
+        try:
+
+            # Ambil shared key dengan pengirim
+            shared_key = self.network_client.get_shared_key(
+                sender
+            )
+
+            if shared_key is None:
+
+                raise ValueError(
+                    f"Shared key dengan {sender} belum tersedia."
+                )
+
+            # Dekripsi pesan
+            plaintext = self.text_encryption.decrypt(
+                ciphertext,
+                shared_key
+            )
+
+            # Simpan pesan yang diterima
+            self.received_messages.append({
+                "sender": sender,
+                "recipient": self.username,
+                "ciphertext": ciphertext,
+                "plaintext": plaintext,
+            })
+
+            # Simpan ciphertext ke database lokal
+            try:
+
+                save_message(
+                    sender,
+                    self.username,
+                    ciphertext
+                )
+
+                print(
+                    "[DATABASE] Incoming message saved."
+                )
+
+            except Exception as database_error:
+
+                print(
+                    "[DATABASE ERROR]",
+                    database_error
+                )
+
+                QMessageBox.warning(
+                    self,
+                    "Storage Warning",
+                    "Pesan berhasil diterima, "
+                    "tetapi gagal disimpan ke database."
+                )
+
+            print(
+                f"[DECRYPTED] Message from {sender}: {plaintext}"
+            )
+
+            # Tampilkan pesan jika kontak sedang dibuka
+            if sender == self.chat_widget.current_contact:
+
+                self.chat_widget.add_message(
+                    plaintext,
+                    outgoing=False
+                )
+
+            else:
+
+                QMessageBox.information(
+                    self,
+                    "New Message",
+                    f"Pesan baru dari {sender}:\n\n{plaintext}"
+                )
+
+        except Exception as error:
+
+            print(
+                f"[DECRYPTION ERROR] {error}"
+            )
+
+            QMessageBox.warning(
+                self,
+                "Decryption Error",
+                f"Gagal mendekripsi pesan dari {sender}:\n{error}"
+            )
+
+    # ==================================
+    # MESSAGE DELIVERY
+    # ==================================
+
+    def handle_message_delivered(self, recipient):
 
         print(
-            f"[MESSAGE] "
-            f"To: {self.chat_widget.current_contact} "
-            f"| Content: {text}"
+            f"[NETWORK] Message successfully forwarded to {recipient}"
         )
+
+    # ==================================
+    # WINDOW CLOSING
+    # ==================================
+
+    def closeEvent(self, event):
+
+        if self.network_client:
+            self.network_client.disconnect_from_server()
+
+        event.accept()

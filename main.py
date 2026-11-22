@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from ui.windows.register_window import RegisterWindow
 from ui.windows.authentication_window import AuthenticationWindow
 from ui.windows.main_window import MainWindow
+from database.db import init_db
 
 from security.dongle import (
     CONFIG_PATH,
@@ -62,7 +63,7 @@ def ask_registration(reason):
 
 
 def main():
-
+    init_db()
     app = QApplication(sys.argv)
     app.setApplicationName("Secure Messenger")
 
@@ -117,7 +118,7 @@ def main():
 
     username = authentication.authenticated_name
 
-    window = MainWindow(username)
+    window = MainWindow(username="Bob")
     window.show()
 
     return app.exec()
