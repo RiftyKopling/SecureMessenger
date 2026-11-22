@@ -1,4 +1,7 @@
 
+import uuid
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -12,8 +15,9 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QFileDialog,
 )
-from pathlib import Path
+
 from PySide6.QtCore import Qt
+
 from network.server_config import load_server_config
 from security.encryption import TextEncryption
 from security.file_encryption import FileEncryption
@@ -35,12 +39,19 @@ class MainWindow(QMainWindow):
 
         self.username = username
         self.role = role
+
         self.text_encryption = TextEncryption()
         self.file_encryption = FileEncryption()
 
         # Penyimpanan sementara pesan
         self.encrypted_messages = []
         self.received_messages = []
+
+        # File masuk yang belum diunduh
+        self.pending_downloads = {}
+
+        # Riwayat file sementara berdasarkan kontak
+        self.file_messages = {}
 
         # Network client
         self.network_client = MessengerClient(
@@ -103,7 +114,6 @@ class MainWindow(QMainWindow):
         self.init_ui()
         self.load_contacts()
 
-        # Hubungkan ke server
         self.connect_to_server()
 
     # ==================================
@@ -125,7 +135,6 @@ class MainWindow(QMainWindow):
             )
 
             if not success:
-
                 print("[NETWORK] Failed to connect to server.")
 
         except Exception as error:
@@ -198,7 +207,6 @@ class MainWindow(QMainWindow):
 
             self.update_contact_status()
 
-            # Muat ulang percakapan setelah kunci tersedia
             self.load_conversation_history(username)
 
     def update_contact_status(self):
@@ -266,7 +274,7 @@ class MainWindow(QMainWindow):
         subtitle.setObjectName("sidebarSubtitle")
         sidebar_layout.addWidget(subtitle)
 
-        # Profile
+        # PROFILE
 
         profile = QFrame()
         profile.setObjectName("profileCard")
@@ -299,7 +307,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addSpacing(15)
         sidebar_layout.addWidget(profile)
 
-        # Search
+        # SEARCH
 
         self.search_input = QLineEdit()
         self.search_input.setObjectName("searchInput")
@@ -314,7 +322,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addSpacing(10)
         sidebar_layout.addWidget(self.search_input)
 
-        # Conversation title
+        # CONVERSATION TITLE
 
         conversation_header = QLabel("MESSAGES")
         conversation_header.setObjectName("sectionTitle")
@@ -322,7 +330,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addSpacing(15)
         sidebar_layout.addWidget(conversation_header)
 
-        # Contact list
+        # CONTACT LIST
 
         self.contact_list = QListWidget()
         self.contact_list.setObjectName("contactList")
@@ -398,6 +406,10 @@ class MainWindow(QMainWindow):
 
         self.chat_widget.file_selected.connect(
             self.handle_file_selected
+        )
+
+        self.chat_widget.file_download_requested.connect(
+            self.handle_file_download
         )
 
         # ==================================
@@ -530,20 +542,19 @@ class MainWindow(QMainWindow):
 
         self.contact_list.clear()
 
-
     def handle_users_updated(self, users):
+
         print("[DEBUG MAIN WINDOW] Users received:", users)
+
         current_contact = self.chat_widget.current_contact
 
         self.contact_list.blockSignals(True)
-
         self.contact_list.clear()
 
         selected_item = None
 
         for name in users:
 
-            # Jangan tampilkan username sendiri
             if name.casefold() == self.username.casefold():
                 continue
 
@@ -558,7 +569,6 @@ class MainWindow(QMainWindow):
 
             self.contact_list.addItem(item)
 
-            # Pertahankan kontak yang sedang dibuka
             if (
                 current_contact
                 and name.casefold() == current_contact.casefold()
@@ -570,17 +580,8 @@ class MainWindow(QMainWindow):
             self.contact_list.count()
         )
 
-        for index in range(self.contact_list.count()):
-
-            print(
-                "[DEBUG MAIN WINDOW] Contact:",
-                self.contact_list.item(index).text()
-            )
-        
         self.contact_list.blockSignals(False)
 
-        # Jika kontak yang sebelumnya dibuka masih online,
-        # pertahankan percakapannya.
         if selected_item is not None:
 
             self.contact_list.setCurrentItem(selected_item)
@@ -593,6 +594,7 @@ class MainWindow(QMainWindow):
 
             self.chat_widget.set_contact(None)
             self.chat_widget.clear_messages()
+
             self.chat_widget.add_message(
                 "Belum ada pengguna lain yang online.",
                 outgoing=False
@@ -806,7 +808,6 @@ class MainWindow(QMainWindow):
 
         self.update_contact_status()
 
-        # Ambil riwayat percakapan dari SQLite
         self.load_conversation_history(name)
 
     # ==================================
@@ -822,7 +823,6 @@ class MainWindow(QMainWindow):
                 contact
             )
 
-            # Bersihkan tampilan chat sebelumnya
             self.chat_widget.clear_messages()
 
             if not messages:
@@ -832,52 +832,55 @@ class MainWindow(QMainWindow):
                     outgoing=False
                 )
 
-                return
+            else:
 
-            shared_key = self.network_client.get_shared_key(
-                contact
-            )
-
-            if shared_key is None:
-
-                self.chat_widget.add_message(
-                    "Menunggu pertukaran kunci untuk membuka riwayat pesan.",
-                    outgoing=False
+                shared_key = self.network_client.get_shared_key(
+                    contact
                 )
 
-                return
-
-            for message in messages:
-
-                try:
-
-                    plaintext = self.text_encryption.decrypt(
-                        message["ciphertext"],
-                        shared_key
-                    )
-
-                    outgoing = (
-                        message["sender"] == self.username
-                    )
+                if shared_key is None:
 
                     self.chat_widget.add_message(
-                        plaintext,
-                        outgoing=outgoing
+                        "Menunggu pertukaran kunci untuk membuka riwayat pesan.",
+                        outgoing=False
                     )
 
-                except Exception as error:
+                else:
 
-                    print(
-                        f"[HISTORY DECRYPTION ERROR] "
-                        f"Message ID {message['id']}: {error}"
-                    )
+                    for message in messages:
 
-                    self.chat_widget.add_message(
-                        "[Pesan tidak dapat didekripsi]",
-                        outgoing=(
-                            message["sender"] == self.username
-                        )
-                    )
+                        try:
+
+                            plaintext = self.text_encryption.decrypt(
+                                message["ciphertext"],
+                                shared_key
+                            )
+
+                            outgoing = (
+                                message["sender"] == self.username
+                            )
+
+                            self.chat_widget.add_message(
+                                plaintext,
+                                outgoing=outgoing
+                            )
+
+                        except Exception as error:
+
+                            print(
+                                f"[HISTORY DECRYPTION ERROR] "
+                                f"Message ID {message['id']}: {error}"
+                            )
+
+                            self.chat_widget.add_message(
+                                "[Pesan tidak dapat didekripsi]",
+                                outgoing=(
+                                    message["sender"] == self.username
+                                )
+                            )
+
+            # Tampilkan file yang tersimpan di memori
+            self.load_file_messages(contact)
 
         except Exception as error:
 
@@ -887,6 +890,19 @@ class MainWindow(QMainWindow):
                 self,
                 "Database Error",
                 f"Gagal memuat riwayat percakapan:\n{error}"
+            )
+
+    def load_file_messages(self, contact):
+
+        messages = self.file_messages.get(contact, [])
+
+        for message in messages:
+
+            self.chat_widget.add_file_message(
+                message["file_id"],
+                message["file_name"],
+                message["file_size"],
+                outgoing=message["outgoing"]
             )
 
     # ==================================
@@ -902,13 +918,11 @@ class MainWindow(QMainWindow):
 
         try:
 
-            # Pastikan koneksi aktif
             if not self.network_client.running:
                 raise ConnectionError(
                     "Belum terhubung ke server."
                 )
 
-            # Ambil shared key
             shared_key = self.network_client.get_shared_key(
                 recipient
             )
@@ -920,13 +934,11 @@ class MainWindow(QMainWindow):
                     "belum tersedia. Tunggu pertukaran kunci selesai."
                 )
 
-            # Enkripsi pesan
             encrypted_message = self.text_encryption.encrypt(
                 message,
                 shared_key
             )
 
-            # Kirim ciphertext ke server
             success = self.network_client.send_message(
                 recipient,
                 encrypted_message
@@ -937,14 +949,12 @@ class MainWindow(QMainWindow):
                     "Server gagal menerima pesan."
                 )
 
-            # Simpan sementara
             self.encrypted_messages.append({
                 "sender": self.username,
                 "recipient": recipient,
                 "ciphertext": encrypted_message,
             })
 
-            # Simpan ciphertext ke database lokal
             try:
 
                 save_message(
@@ -1000,7 +1010,6 @@ class MainWindow(QMainWindow):
 
         try:
 
-            # Ambil shared key dengan pengirim
             shared_key = self.network_client.get_shared_key(
                 sender
             )
@@ -1011,13 +1020,11 @@ class MainWindow(QMainWindow):
                     f"Shared key dengan {sender} belum tersedia."
                 )
 
-            # Dekripsi pesan
             plaintext = self.text_encryption.decrypt(
                 ciphertext,
                 shared_key
             )
 
-            # Simpan pesan yang diterima
             self.received_messages.append({
                 "sender": sender,
                 "recipient": self.username,
@@ -1025,7 +1032,6 @@ class MainWindow(QMainWindow):
                 "plaintext": plaintext,
             })
 
-            # Simpan ciphertext ke database lokal
             try:
 
                 save_message(
@@ -1056,7 +1062,6 @@ class MainWindow(QMainWindow):
                 f"[DECRYPTED] Message from {sender}: {plaintext}"
             )
 
-            # Tampilkan pesan jika kontak sedang dibuka
             if sender == self.chat_widget.current_contact:
 
                 self.chat_widget.add_message(
@@ -1095,6 +1100,239 @@ class MainWindow(QMainWindow):
         )
 
     # ==================================
+    # FILE SENDING
+    # ==================================
+
+    def handle_file_selected(self, file_path):
+
+        recipient = self.chat_widget.current_contact
+
+        if not recipient:
+
+            QMessageBox.warning(
+                self,
+                "Pilih Kontak",
+                "Pilih kontak terlebih dahulu sebelum mengirim file."
+            )
+
+            return
+
+        try:
+
+            if not self.network_client.running:
+                raise ConnectionError(
+                    "Belum terhubung ke server."
+                )
+
+            shared_key = self.network_client.get_shared_key(
+                recipient
+            )
+
+            if shared_key is None:
+
+                raise ConnectionError(
+                    f"Shared key dengan {recipient} belum tersedia. "
+                    "Tunggu pertukaran kunci selesai."
+                )
+
+            path = Path(file_path)
+
+            file_name = path.name
+            file_size = path.stat().st_size
+
+            # Enkripsi menggunakan ChaCha20-Poly1305
+            encrypted_file = self.file_encryption.encrypt_file(
+                file_path,
+                shared_key
+            )
+
+            # Kirim melalui protokol file
+            success = self.network_client.send_file(
+                recipient,
+                encrypted_file
+            )
+
+            if not success:
+
+                raise ConnectionError(
+                    "File gagal dikirim ke server."
+                )
+
+            # Simpan riwayat file di memori
+            self.file_messages.setdefault(
+                recipient,
+                []
+            ).append({
+                "file_id": None,
+                "file_name": file_name,
+                "file_size": file_size,
+                "outgoing": True
+            })
+
+            # Tampilkan bubble file di chat pengirim
+            if recipient == self.chat_widget.current_contact:
+
+                self.chat_widget.add_file_message(
+                    None,
+                    file_name,
+                    file_size,
+                    outgoing=True
+                )
+
+            print(
+                f"[FILE] Encrypted file sent to {recipient}: {file_name}"
+            )
+
+        except Exception as error:
+
+            QMessageBox.warning(
+                self,
+                "File Error",
+                f"Gagal mengirim file:\n{error}"
+            )
+
+    # ==================================
+    # FILE RECEIVING
+    # ==================================
+
+    def handle_file_received(self, sender, ciphertext):
+
+        try:
+
+            shared_key = self.network_client.get_shared_key(
+                sender
+            )
+
+            if shared_key is None:
+
+                raise ValueError(
+                    f"Shared key dengan {sender} belum tersedia."
+                )
+
+            # Dekripsi file ke memori
+            file_name, file_data = self.file_encryption.decrypt_file(
+                ciphertext,
+                shared_key
+            )
+
+            # Sanitasi nama file
+            file_name = Path(file_name).name
+
+            # ID unik untuk file
+            file_id = str(uuid.uuid4())
+
+            # Simpan data file sementara
+            self.pending_downloads[file_id] = {
+                "file_name": file_name,
+                "file_data": file_data,
+                "sender": sender
+            }
+
+            # Simpan riwayat file
+            self.file_messages.setdefault(
+                sender,
+                []
+            ).append({
+                "file_id": file_id,
+                "file_name": file_name,
+                "file_size": len(file_data),
+                "outgoing": False
+            })
+
+            # Tampilkan bubble di chat penerima
+            if sender == self.chat_widget.current_contact:
+
+                self.chat_widget.add_file_message(
+                    file_id,
+                    file_name,
+                    len(file_data),
+                    outgoing=False
+                )
+
+            print(
+                f"[FILE] Received file from {sender}: {file_name}"
+            )
+
+        except Exception as error:
+
+            print(
+                f"[FILE DECRYPTION ERROR] {error}"
+            )
+
+            QMessageBox.warning(
+                self,
+                "File Decryption Error",
+                f"Gagal menerima atau mendekripsi file:\n{error}"
+            )
+
+    # ==================================
+    # FILE DOWNLOAD
+    # ==================================
+
+    def handle_file_download(self, file_id):
+
+        file_info = self.pending_downloads.get(file_id)
+
+        if not file_info:
+
+            QMessageBox.warning(
+                self,
+                "File Tidak Tersedia",
+                "Data file tidak ditemukan atau sudah tidak tersedia."
+            )
+
+            return
+
+        file_name = file_info["file_name"]
+        file_data = file_info["file_data"]
+
+        # Dialog Save As hanya muncul saat tombol Download ditekan
+        save_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Simpan File",
+            file_name,
+            "All Files (*.*)"
+        )
+
+        if not save_path:
+            return
+
+        try:
+
+            Path(save_path).write_bytes(file_data)
+
+            QMessageBox.information(
+                self,
+                "Download Berhasil",
+                f"File berhasil disimpan:\n{save_path}"
+            )
+
+            print(
+                f"[FILE] Downloaded: {save_path}"
+            )
+
+            # Hapus data sementara setelah berhasil disimpan
+            self.pending_downloads.pop(file_id, None)
+
+        except OSError as error:
+
+            QMessageBox.warning(
+                self,
+                "Gagal Menyimpan",
+                f"Gagal menyimpan file:\n{error}"
+            )
+
+    # ==================================
+    # FILE DELIVERY
+    # ==================================
+
+    def handle_file_delivered(self, recipient):
+
+        print(
+            f"[NETWORK] Encrypted file successfully forwarded to {recipient}"
+        )
+
+    # ==================================
     # WINDOW CLOSING
     # ==================================
 
@@ -1104,122 +1342,3 @@ class MainWindow(QMainWindow):
             self.network_client.disconnect_from_server()
 
         event.accept()
-
-    def handle_file_selected(self, file_path):
-
-        recipient = self.chat_widget.current_contact
-
-        if not recipient:
-            QMessageBox.warning(
-                self,
-                "Pilih Kontak",
-                "Pilih kontak terlebih dahulu sebelum mengirim file."
-            )
-            return
-
-        try:
-            if not self.network_client.running:
-                raise ConnectionError("Belum terhubung ke server.")
-
-            shared_key = self.network_client.get_shared_key(recipient)
-
-            if shared_key is None:
-                raise ConnectionError(
-                    f"Shared key dengan {recipient} belum tersedia. "
-                    "Tunggu pertukaran kunci selesai."
-                )
-
-            file_name = Path(file_path).name
-
-            # Enkripsi file menggunakan ChaCha20-Poly1305.
-            encrypted_file = self.file_encryption.encrypt_file(
-                file_path,
-                shared_key
-            )
-
-            # Kirim ciphertext melalui protokol file, bukan protokol pesan teks.
-            success = self.network_client.send_file(
-                recipient,
-                encrypted_file
-            )
-
-            if not success:
-                raise ConnectionError("File gagal dikirim ke server.")
-
-            self.chat_widget.add_message(
-                f"📎 File dikirim: {file_name}",
-                outgoing=True
-            )
-
-            print(
-                f"[FILE] Encrypted file sent to {recipient}: {file_name}"
-            )
-
-        except Exception as error:
-            QMessageBox.warning(
-                self,
-                "File Error",
-                f"Gagal mengirim file:\n{error}"
-            )
-
-    def handle_file_received(self, sender, ciphertext):
-
-        try:
-            shared_key = self.network_client.get_shared_key(sender)
-
-            if shared_key is None:
-                raise ValueError(
-                    f"Shared key dengan {sender} belum tersedia."
-                )
-
-            # Dekripsi dan autentikasi ciphertext file.
-            file_name, file_data = self.file_encryption.decrypt_file(
-                ciphertext,
-                shared_key
-            )
-
-            if sender == self.chat_widget.current_contact:
-                self.chat_widget.add_message(
-                    f"📎 File diterima: {file_name}",
-                    outgoing=False
-                )
-
-            save_path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Simpan File yang Diterima",
-                file_name,
-                "All Files (*.*)"
-            )
-
-            if not save_path:
-                print(
-                    f"[FILE] File from {sender} decrypted but not saved."
-                )
-                return
-
-            Path(save_path).write_bytes(file_data)
-
-            QMessageBox.information(
-                self,
-                "File Berhasil Diterima",
-                f"File dari {sender} berhasil didekripsi dan disimpan:\n"
-                f"{save_path}"
-            )
-
-            print(
-                f"[FILE] File received from {sender} and saved: {save_path}"
-            )
-
-        except Exception as error:
-            print(f"[FILE DECRYPTION ERROR] {error}")
-            QMessageBox.warning(
-                self,
-                "File Decryption Error",
-                f"Gagal menerima atau mendekripsi file dari {sender}:\n{error}"
-            )
-
-    def handle_file_delivered(self, recipient):
-
-        print(
-            f"[NETWORK] Encrypted file successfully forwarded to {recipient}"
-        )

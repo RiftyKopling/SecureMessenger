@@ -18,4 +18,4 @@ data/*.db-wal
 
 models
 
-config/device_config.json
+config
