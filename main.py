@@ -117,9 +117,8 @@ def main():
     # ==================================
 
     username = authentication.authenticated_name
-    role = authentication.authenticated_role
 
-    window = MainWindow(username, role=role)
+    window = MainWindow(username)
     window.show()
 
     return app.exec()

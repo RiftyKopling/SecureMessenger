@@ -52,16 +52,12 @@ def init_db():
 
                 password_salt BLOB NOT NULL,
 
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-                role TEXT NOT NULL DEFAULT 'user',
-
-                is_active INTEGER NOT NULL DEFAULT 1
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 
             )
         """)
 
-        # Migrasi kolom users
+        # Migrasi kolom users (dari push teman)
         existing_user_columns = {
             row["name"]
             for row in connection.execute(
@@ -177,7 +173,7 @@ def hash_password(password, salt=None):
 # REGISTER USER
 # ==================================
 
-def create_user(username, password, role="user"):
+def create_user(username, password):
 
     username = username.strip()
 
@@ -191,9 +187,6 @@ def create_user(username, password, role="user"):
             "Password minimal 8 karakter."
         )
 
-    if role not in ("admin", "user"):
-        raise ValueError("Role harus 'admin' atau 'user'.")
-
     password_hash, salt = hash_password(password)
 
     try:
@@ -204,15 +197,13 @@ def create_user(username, password, role="user"):
                 INSERT INTO users (
                     username,
                     password_hash,
-                    password_salt,
-                    role
+                    password_salt
                 )
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?)
             """, (
                 username,
                 password_hash,
-                salt,
-                role
+                salt
             ))
 
             connection.commit()
@@ -240,8 +231,6 @@ def authenticate_user(username, password):
                 username,
                 password_hash,
                 password_salt,
-                role,
-                is_active,
                 created_at
 
             FROM users
@@ -250,9 +239,6 @@ def authenticate_user(username, password):
         """, (username,)).fetchone()
 
     if row is None:
-        return None
-
-    if not row["is_active"]:
         return None
 
     calculated_hash, _ = hash_password(
@@ -269,8 +255,6 @@ def authenticate_user(username, password):
     return User(
         id=row["id"],
         username=row["username"],
-        role=row["role"],
-        is_active=row["is_active"],
         created_at=row["created_at"]
     )
 
@@ -515,86 +499,4 @@ def get_latest_message(username, contact):
     return dict(row) if row else None
 
 
-# ==================================
-# COUNT USERS
-# ==================================
 
-def count_users():
-
-    with get_connection() as connection:
-
-        row = connection.execute("""
-            SELECT COUNT(*) AS total
-            FROM users
-        """).fetchone()
-
-    return row["total"]
-
-
-# ==================================
-# GET ALL USERS
-# ==================================
-
-def get_all_users():
-
-    with get_connection() as connection:
-
-        rows = connection.execute("""
-            SELECT
-                id,
-                username,
-                role,
-                is_active,
-                created_at
-
-            FROM users
-
-            ORDER BY username COLLATE NOCASE
-        """).fetchall()
-
-    return [dict(row) for row in rows]
-
-
-# ==================================
-# SET USER ROLE
-# ==================================
-
-def set_user_role(username, role):
-
-    if role not in ("admin", "user"):
-        raise ValueError("Role harus 'admin' atau 'user'.")
-
-    username = username.strip()
-
-    with get_connection() as connection:
-
-        connection.execute("""
-            UPDATE users
-            SET role = ?
-            WHERE username = ?
-        """, (role, username))
-
-        connection.commit()
-
-    return True
-
-
-# ==================================
-# SET USER ACTIVE STATUS
-# ==================================
-
-def set_user_active(username, is_active):
-
-    username = username.strip()
-
-    with get_connection() as connection:
-
-        connection.execute("""
-            UPDATE users
-            SET is_active = ?
-            WHERE username = ?
-        """, (1 if is_active else 0, username))
-
-        connection.commit()
-
-    return True
