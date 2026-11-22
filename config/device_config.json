@@ -1,7 +1,7 @@
 {
     "version": 1,
-    "volume_serial": "1E4A8CA9",
+    "display_name": "Rifty",
+    "volume_serial": "3AD6912A",
     "key_filename": "dongle.key",
-    "key_sha256": "280979f4143713b9f929a559a80b8d46f0a7c16a105ab470a713d9ba079fdd79",
-    "display_name": "Finz"
+    "key_sha256": "89adba4172da24d36739c5d409bac923a6f4cdd5e936626764c964d56f3116e9"
 }
