@@ -16,4 +16,14 @@ data/*.db-wal
 .vscode/
 .idea/
 
-models
+models/
+
+config/
+
+AGENTS.md
+CLAUDE.md
+config.json
+penjelasan_proyek.md
+PROTOCOL.md
+trainer.yml
+dataset/

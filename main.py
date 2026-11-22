@@ -23,9 +23,16 @@ from security.face_recognition import (
 )
 
 
+registration_window = None
+
+
 def open_registration():
-    window = RegisterWindow()
-    window.exec()
+    global registration_window
+
+    registration_window = RegisterWindow()
+    registration_window.show()
+
+    return registration_window
 
 
 def ask_registration(reason):
@@ -70,13 +77,19 @@ def main():
     # CHECK REGISTRATION
     # ==================================
 
+    print("CONFIG_PATH:", CONFIG_PATH)
+    print("FILE EXISTS:", CONFIG_PATH.exists())
+    print("CONFIG:", CONFIG_PATH.exists())
+    print("MODEL:", MODEL_PATH, MODEL_PATH.exists())
+    print("LABEL:", LABEL_PATH, LABEL_PATH.exists())
+
     if not CONFIG_PATH.exists():
         open_registration()
-        return 0
+        return app.exec()
 
     if not MODEL_PATH.exists() or not LABEL_PATH.exists():
         open_registration()
-        return 0
+        return app.exec()
 
     # ==================================
     # USB VERIFICATION
