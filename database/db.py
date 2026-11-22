@@ -135,10 +135,26 @@ def init_db():
 
                 ciphertext TEXT NOT NULL,
 
+                metadata TEXT,  -- JSON: duration_ms, format, type (voice_note/file)
+
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 
             )
         """)
+
+        # Migration: add metadata column if not exists
+        existing_media_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(media_messages)"
+            ).fetchall()
+        }
+
+        if "metadata" not in existing_media_columns:
+            connection.execute("""
+                ALTER TABLE media_messages
+                ADD COLUMN metadata TEXT
+            """)
 
         connection.execute("""
             CREATE INDEX IF NOT EXISTS idx_media_conversation
@@ -364,7 +380,7 @@ def get_conversation(username, contact, limit=200):
 # SAVE ENCRYPTED MEDIA
 # ==================================
 
-def save_media_message(sender, recipient, filename, ciphertext):
+def save_media_message(sender, recipient, filename, ciphertext, metadata=None):
 
     if not isinstance(sender, str) or not sender.strip():
         raise ValueError("Invalid sender.")
@@ -385,6 +401,9 @@ def save_media_message(sender, recipient, filename, ciphertext):
     recipient = recipient.strip()
     filename = Path(filename).name
 
+    import json
+    metadata_json = json.dumps(metadata) if metadata else None
+
     with get_connection() as connection:
 
         cursor = connection.execute("""
@@ -392,14 +411,16 @@ def save_media_message(sender, recipient, filename, ciphertext):
                 sender,
                 recipient,
                 filename,
-                ciphertext
+                ciphertext,
+                metadata
             )
-            VALUES (?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?)
         """, (
             sender,
             recipient,
             filename,
-            ciphertext
+            ciphertext,
+            metadata_json
         ))
 
         connection.commit()
@@ -425,6 +446,7 @@ def get_media_conversation(username, contact, limit=200):
                 recipient,
                 filename,
                 ciphertext,
+                metadata,
                 created_at
 
             FROM media_messages
@@ -451,10 +473,17 @@ def get_media_conversation(username, contact, limit=200):
             limit
         )).fetchall()
 
-    return [
-        dict(row)
-        for row in reversed(rows)
-    ]
+    import json
+    result = []
+    for row in reversed(rows):
+        msg = dict(row)
+        if msg.get("metadata"):
+            try:
+                msg["metadata"] = json.loads(msg["metadata"])
+            except Exception:
+                msg["metadata"] = None
+        result.append(msg)
+    return result
 
 
 # ==================================

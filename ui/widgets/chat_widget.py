@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 
 from ui.widgets.message_bubble import MessageBubble
+from ui.widgets.voice_note_bubble import VoiceNoteBubble, VoiceNoteRecorderWidget
 
 
 class ChatWidget(QWidget):
@@ -21,11 +22,18 @@ class ChatWidget(QWidget):
     file_selected = Signal(str)
     file_download_requested = Signal(str)
     message_sent = Signal(str)
+    steganography_requested = Signal()
+    voice_note_record_requested = Signal()      # Start recording
+    voice_note_send_requested = Signal(str)     # Send recorded voice note (temp file path)
+    voice_note_cancel_requested = Signal()      # Cancel recording
+    voice_note_play_requested = Signal(str)     # Play voice note (file_id)
+    voice_note_download_requested = Signal(str) # Download voice note (file_id)
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
         self.current_contact = None
+        self._recorder_widget = None
 
         self.init_ui()
 
@@ -70,7 +78,14 @@ class ChatWidget(QWidget):
         self.security_button = QPushButton("♢  Security")
         self.security_button.setObjectName("securityButton")
 
+        self.steganography_button = QPushButton("[Steganography]")
+        self.steganography_button.setObjectName("steganographyButton")
+        self.steganography_button.clicked.connect(
+            lambda: self.steganography_requested.emit()
+        )
+
         header_layout.addWidget(self.security_button)
+        header_layout.addWidget(self.steganography_button)
 
         main_layout.addWidget(header)
 
@@ -119,6 +134,14 @@ class ChatWidget(QWidget):
             self.select_file
         )
 
+        # MICROPHONE BUTTON (Voice Note)
+
+        self.mic_button = QPushButton("🎤")
+        self.mic_button.setObjectName("micButton")
+        self.mic_button.setFixedSize(48, 48)
+        self.mic_button.setToolTip("Record Voice Note")
+        self.mic_button.clicked.connect(self._on_mic_clicked)
+
         # MESSAGE INPUT
 
         self.message_input = QLineEdit()
@@ -143,10 +166,25 @@ class ChatWidget(QWidget):
         )
 
         input_layout.addWidget(attach_button)
+        input_layout.addWidget(self.mic_button)
         input_layout.addWidget(self.message_input)
         input_layout.addWidget(send_button)
 
         main_layout.addWidget(input_container)
+
+        # ==================================
+        # VOICE RECORDER WIDGET (hidden by default)
+        # ==================================
+
+        self.recorder_widget = VoiceNoteRecorderWidget()
+        self.recorder_widget.recording_finished.connect(
+            lambda path: self.voice_note_send_requested.emit(path)
+        )
+        self.recorder_widget.recording_cancelled.connect(
+            self._on_recording_cancelled
+        )
+        self.recorder_widget.hide()
+        main_layout.addWidget(self.recorder_widget)
 
         # ==================================
         # STYLING
@@ -201,6 +239,20 @@ class ChatWidget(QWidget):
                 background-color: #203b5c;
             }
 
+            QPushButton#steganographyButton {
+                background-color: #172c45;
+                color: #60a5fa;
+                border: 1px solid #29466b;
+                border-radius: 8px;
+                padding: 9px 15px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+
+            QPushButton#steganographyButton:hover {
+                background-color: #203b5c;
+            }
+
             QScrollArea#chatScroll {
                 background-color: #0b1120;
                 border: none;
@@ -252,6 +304,30 @@ class ChatWidget(QWidget):
 
             QPushButton#sendButton:hover {
                 background-color: #3b82f6;
+            }
+
+            QPushButton#micButton {
+                background-color: #172c45;
+                color: #60a5fa;
+                border: 1px solid #29466b;
+                border-radius: 9px;
+                font-size: 18px;
+            }
+
+            QPushButton#micButton:hover {
+                background-color: #203b5c;
+            }
+
+            QPushButton#micButton:pressed {
+                background-color: #ef4444;
+                color: white;
+                border: 1px solid #ef4444;
+            }
+
+            QPushButton#micButton.recording {
+                background-color: #ef4444;
+                color: white;
+                border: 1px solid #ef4444;
             }
 
             QFrame#fileBubble {
@@ -517,3 +593,105 @@ class ChatWidget(QWidget):
             return
 
         self.file_selected.emit(file_path)
+
+    # ==================================
+    # VOICE NOTE RECORDING
+    # ==================================
+
+    def _on_mic_clicked(self):
+        """Handle microphone button click - start recording."""
+        if not self.current_contact:
+            return
+        
+        # Hide input, show recorder
+        self.message_input.hide()
+        self.mic_button.hide()
+        self.recorder_widget.show()
+        
+        # Import and create recorder
+        from security.voice_recorder import VoiceRecorder
+        recorder = VoiceRecorder(self)
+        recorder.set_max_duration(5)  # 5 minutes max
+        self.recorder_widget.start_recording(recorder)
+        
+        # Update mic button state
+        self.mic_button.setProperty("recording", True)
+        self.mic_button.style().unpolish(self.mic_button)
+        self.mic_button.style().polish(self.mic_button)
+
+    def _on_recording_cancelled(self):
+        """Handle recording cancelled."""
+        self._reset_input_ui()
+
+    def _reset_input_ui(self):
+        """Reset UI to normal input state."""
+        self.recorder_widget.hide()
+        self.message_input.show()
+        self.mic_button.show()
+        self.mic_button.setProperty("recording", False)
+        self.mic_button.style().unpolish(self.mic_button)
+        self.mic_button.style().polish(self.mic_button)
+
+    # ==================================
+    # VOICE NOTE DISPLAY
+    # ==================================
+
+    def add_voice_note_message(
+        self,
+        file_id: str,
+        file_name: str,
+        duration_ms: int,
+        outgoing: bool,
+        metadata: dict = None
+    ):
+        """Add a voice note bubble to the chat."""
+        container = QWidget()
+        outer_layout = QHBoxLayout(container)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Align based on outgoing/incoming
+        if outgoing:
+            outer_layout.addStretch()
+
+        bubble = VoiceNoteBubble(file_id, file_name, duration_ms, outgoing)
+        
+        # Connect signals
+        bubble.play_requested.connect(self.voice_note_play_requested.emit)
+        bubble.download_requested.connect(self.voice_note_download_requested.emit)
+
+        outer_layout.addWidget(bubble)
+
+        if not outgoing:
+            outer_layout.addStretch()
+
+        self.message_layout.insertWidget(
+            self.message_layout.count() - 1,
+            container
+        )
+
+        self.scroll_to_bottom()
+        
+        return bubble
+
+    def update_voice_note_bubble(self, file_id: str, decrypted_path: str = None, 
+                                  playing: bool = None, position_ms: int = None,
+                                  duration_ms: int = None, status: str = None):
+        """Update an existing voice note bubble."""
+        # Find the bubble widget
+        for i in range(self.message_layout.count()):
+            widget = self.message_layout.itemAt(i).widget()
+            if widget:
+                # Check if it's a voice note container
+                for child in widget.findChildren(VoiceNoteBubble):
+                    if child.file_id == file_id:
+                        if decrypted_path:
+                            child.set_decrypted_file(decrypted_path)
+                        if playing is not None:
+                            child.set_playing(playing)
+                        if position_ms is not None:
+                            child.set_position(position_ms)
+                        if duration_ms is not None:
+                            child.set_duration(duration_ms)
+                        if status is not None:
+                            child.set_status(status)
+                        return
