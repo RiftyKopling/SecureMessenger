@@ -16,6 +16,7 @@ from PySide6.QtGui import QImage, QPixmap
 
 from security.dongle import verify_dongle
 from security.face_recognition import FaceVerification
+from database.db import get_connection
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[2]
@@ -39,6 +40,8 @@ class AuthenticationWindow(QDialog):
         self.success_count = 0
         self.required_matches = 5
         self.authenticated_name = None
+        self.authenticated_role = None
+        self.authenticated_is_active = 1
 
         self.init_ui()
         self.authenticate_device()
@@ -115,6 +118,38 @@ class AuthenticationWindow(QDialog):
                 self.reject_authentication(
                     "Display name tidak ditemukan."
                 )
+                return
+
+            # Cek role dan status aktif di database
+            try:
+
+                with get_connection() as connection:
+
+                    row = connection.execute("""
+                        SELECT role, is_active
+                        FROM users
+                        WHERE username = ?
+                    """, (self.display_name,)).fetchone()
+
+                if row is None:
+                    self.reject_authentication(
+                        "User tidak terdaftar di database. "
+                        "Hubungi admin."
+                    )
+                    return
+
+                self.authenticated_role = row["role"]
+                self.authenticated_is_active = row["is_active"]
+
+                if self.authenticated_is_active == 0:
+                    self.reject_authentication(
+                        "Akun Anda dinonaktifkan oleh admin."
+                    )
+                    return
+
+            except Exception as error:
+
+                self.reject_authentication(str(error))
                 return
 
             self.status_label.setText(

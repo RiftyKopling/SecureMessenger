@@ -18,16 +18,23 @@ from network.server_config import load_server_config
 from security.encryption import TextEncryption
 from security.file_encryption import FileEncryption
 from network.client import MessengerClient
-from database.db import save_message, get_conversation
+from database.db import (
+    save_message,
+    get_conversation,
+    get_all_users,
+    set_user_role,
+    set_user_active,
+)
 from ui.widgets.chat_widget import ChatWidget
 
 
 class MainWindow(QMainWindow):
 
-    def __init__(self, username="User"):
+    def __init__(self, username="User", role="user"):
         super().__init__()
 
         self.username = username
+        self.role = role
         self.text_encryption = TextEncryption()
         self.file_encryption = FileEncryption()
 
@@ -326,6 +333,49 @@ class MainWindow(QMainWindow):
 
         sidebar_layout.addWidget(self.contact_list)
 
+        # Admin panel (hanya untuk role admin)
+
+        if self.role == "admin":
+
+            admin_header = QLabel("KELOLA USER")
+            admin_header.setObjectName("sectionTitle")
+
+            sidebar_layout.addSpacing(15)
+            sidebar_layout.addWidget(admin_header)
+
+            self.admin_user_list = QListWidget()
+            self.admin_user_list.setObjectName("adminUserList")
+
+            sidebar_layout.addWidget(self.admin_user_list)
+
+            admin_button_layout = QHBoxLayout()
+
+            self.btn_toggle_active = QPushButton("Nonaktifkan / Aktifkan")
+            self.btn_toggle_active.setFixedHeight(36)
+            self.btn_toggle_active.clicked.connect(
+                self.toggle_user_active
+            )
+
+            self.btn_change_role = QPushButton("Ubah Role")
+            self.btn_change_role.setFixedHeight(36)
+            self.btn_change_role.clicked.connect(
+                self.change_user_role
+            )
+
+            self.btn_refresh_users = QPushButton("Refresh")
+            self.btn_refresh_users.setFixedHeight(36)
+            self.btn_refresh_users.clicked.connect(
+                self.load_admin_users
+            )
+
+            admin_button_layout.addWidget(self.btn_toggle_active)
+            admin_button_layout.addWidget(self.btn_change_role)
+            admin_button_layout.addWidget(self.btn_refresh_users)
+
+            sidebar_layout.addLayout(admin_button_layout)
+
+            self.load_admin_users()
+
         # Footer
 
         sidebar_footer = QLabel("END-TO-END SECURITY")
@@ -560,6 +610,187 @@ class MainWindow(QMainWindow):
 
             item.setHidden(
                 text.lower() not in name.lower()
+            )
+
+    # ==================================
+    # ADMIN USER MANAGEMENT
+    # ==================================
+
+    def load_admin_users(self):
+
+        if self.role != "admin":
+
+            return
+
+        self.admin_user_list.clear()
+
+        try:
+
+            users = get_all_users()
+
+            for user in users:
+
+                status = "Aktif" if user["is_active"] == 1 else "Nonaktif"
+
+                text = (
+                    f"{user['username']} | {user['role']} | {status}"
+                )
+
+                item = QListWidgetItem(text)
+
+                item.setData(
+                    Qt.ItemDataRole.UserRole,
+                    user["username"]
+                )
+
+                self.admin_user_list.addItem(item)
+
+        except Exception as error:
+
+            print("[ADMIN ERROR] Gagal memuat daftar user:", error)
+
+    def toggle_user_active(self):
+
+        if self.role != "admin":
+
+            return
+
+        current = self.admin_user_list.currentItem()
+
+        if current is None:
+
+            QMessageBox.warning(
+                self,
+                "Pilih User",
+                "Pilih user dari daftar terlebih dahulu."
+            )
+
+            return
+
+        username = current.data(Qt.ItemDataRole.UserRole)
+
+        if username.casefold() == self.username.casefold():
+
+            QMessageBox.warning(
+                self,
+                "Tidak Diizinkan",
+                "Anda tidak dapat menonaktifkan akun sendiri."
+            )
+
+            return
+
+        # Cek status saat ini
+
+        is_active = None
+
+        for index in range(self.admin_user_list.count()):
+
+            item = self.admin_user_list.item(index)
+
+            if item.data(Qt.ItemDataRole.UserRole) == username:
+
+                text = item.text()
+
+                is_active = "Aktif" in text
+
+                break
+
+        if is_active is None:
+
+            return
+
+        new_active = 0 if is_active else 1
+
+        try:
+
+            set_user_active(username, new_active)
+
+            status_baru = "diaktifkan" if new_active == 1 else "dinonaktifkan"
+
+            QMessageBox.information(
+                self,
+                "Berhasil",
+                f"User {username} berhasil {status_baru}."
+            )
+
+            self.load_admin_users()
+
+        except Exception as error:
+
+            QMessageBox.critical(
+                self,
+                "Gagal",
+                f"Gagal mengubah status user:\n{error}"
+            )
+
+    def change_user_role(self):
+
+        if self.role != "admin":
+
+            return
+
+        current = self.admin_user_list.currentItem()
+
+        if current is None:
+
+            QMessageBox.warning(
+                self,
+                "Pilih User",
+                "Pilih user dari daftar terlebih dahulu."
+            )
+
+            return
+
+        username = current.data(Qt.ItemDataRole.UserRole)
+
+        if username.casefold() == self.username.casefold():
+
+            QMessageBox.warning(
+                self,
+                "Tidak Diizinkan",
+                "Anda tidak dapat mengubah role akun sendiri."
+            )
+
+            return
+
+        # Cek role saat ini dari teks item
+
+        role_saat_ini = "user"
+
+        for index in range(self.admin_user_list.count()):
+
+            item = self.admin_user_list.item(index)
+
+            if item.data(Qt.ItemDataRole.UserRole) == username:
+
+                text = item.text()
+
+                if "| admin |" in text:
+
+                    role_saat_ini = "admin"
+
+                break
+
+        role_baru = "admin" if role_saat_ini == "user" else "user"
+
+        try:
+
+            set_user_role(username, role_baru)
+
+            QMessageBox.information(
+                self,
+                "Berhasil",
+                f"Role user {username} diubah menjadi {role_baru}."
+            )
+
+            self.load_admin_users()
+
+        except Exception as error:
+
+            QMessageBox.critical(
+                self,
+                "Gagal",
+                f"Gagal mengubah role user:\n{error}"
             )
 
     def select_contact(self, current, previous):

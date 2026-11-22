@@ -22,6 +22,8 @@ from security.dongle import (
     update_display_name,
 )
 
+from database.db import create_user, count_users
+
 class RegisterWindow(QDialog):
 
     def __init__(self, parent=None):
@@ -375,6 +377,20 @@ class RegisterWindow(QDialog):
                     f"USB Dongle berhasil didaftarkan!\n"
                     f"Display Name: {username}"
                 )
+
+            # Simpan user ke database dengan role otomatis
+            # (user pertama secara otomatis menjadi admin)
+
+            try:
+
+                role = "admin" if count_users() == 0 else "user"
+
+                create_user(username, "dongle_face_auth", role)
+
+            except Exception:
+
+                pass
+
             self.face_button.setEnabled(True)
             QMessageBox.information(
                 self,
