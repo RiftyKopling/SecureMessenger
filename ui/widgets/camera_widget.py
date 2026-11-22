@@ -2,7 +2,7 @@
 import cv2
 
 from PySide6.QtWidgets import (
-    QWidget,
+    QDialog,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -12,13 +12,16 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 
 from security.face_recognition import FaceEnrollment
 
 
-class CameraWidget(QWidget):
+class CameraWidget(QDialog):
+
+    # Signal emitted when face enrollment training is completed
+    enrollment_completed = Signal()
 
     def __init__(self, display_name, parent=None):
         super().__init__(parent)
@@ -44,7 +47,8 @@ class CameraWidget(QWidget):
             QWidget {
                 background-color: #0b1120;
                 color: #e2e8f0;
-                font-family: 'Segoe UI';
+                font-family: "Segoe UI", sans-serif;
+                font-size: 12px;
             }
 
             QFrame#header {
@@ -507,6 +511,11 @@ class CameraWidget(QWidget):
                 "Training Successful",
                 "Face recognition model saved successfully."
             )
+
+            # Emit signal to notify that enrollment is completed
+            self.enrollment_completed.emit()
+            # Accept the dialog to close it
+            self.accept()
 
         except Exception as error:
             QMessageBox.critical(

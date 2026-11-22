@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QLabel, QSlider, QSizePolicy, QFrame
 )
 from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QFont, QColor, QPalette
+from PySide6.QtGui import QColor, QPalette
 
 
 class VoiceNoteBubble(QWidget):
@@ -193,8 +193,7 @@ class VoiceNoteBubble(QWidget):
             QLabel#voiceTimeLabel {{
                 color: {time_color};
                 font-size: 11px;
-                font-family: "Consolas", "Monospace";
-                font-variant-numeric: tabular-nums;
+                font-family: "Consolas", monospace;
             }}
             
             QLabel#voiceStatusLabel {{
@@ -378,12 +377,21 @@ class VoiceNoteRecorderWidget(QWidget):
         self.cancel_btn.clicked.connect(self._on_cancel)
         btn_layout.addWidget(self.cancel_btn)
         
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setObjectName("recorderStopButton")
+        self.stop_btn.setFixedHeight(36)
+        self.stop_btn.setFixedWidth(100)
+        self.stop_btn.clicked.connect(self._on_stop)
+        self.stop_btn.setEnabled(True)
+        btn_layout.addWidget(self.stop_btn)
+        
         self.send_btn = QPushButton("Send")
         self.send_btn.setObjectName("recorderSendButton")
         self.send_btn.setFixedHeight(36)
         self.send_btn.setFixedWidth(100)
         self.send_btn.clicked.connect(self._on_send)
         self.send_btn.setEnabled(False)  # Enable after recording stops
+        self.send_btn.hide()  # Hidden until recording stops
         btn_layout.addWidget(self.send_btn)
         
         layout.addLayout(btn_layout)
@@ -426,6 +434,17 @@ class VoiceNoteRecorderWidget(QWidget):
             }
             QPushButton#recorderCancelButton:hover {
                 background-color: #334155;
+            }
+            QPushButton#recorderStopButton {
+                background-color: #ef4444;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton#recorderStopButton:hover {
+                background-color: #f87171;
             }
             QPushButton#recorderSendButton {
                 background-color: #10b981;
@@ -482,9 +501,16 @@ class VoiceNoteRecorderWidget(QWidget):
         self._blink_timer.stop()
         self.recording_dot.setText("✓")
         self.recording_dot.setStyleSheet("color: #10b981; font-size: 20px; font-weight: bold;")
-        self.status_label.setText("Recording complete")
+        self.status_label.setText("Recording complete - ready to send")
         self._temp_file = file_path
+        # Swap Stop button for Send button
+        self.stop_btn.hide()
+        self.send_btn.show()
         self.send_btn.setEnabled(True)
+    
+    def _on_stop(self):
+        """Stop button clicked - stop recording."""
+        self.stop_recording()
     
     def _on_error(self, error_msg: str):
         """Handle recording error."""
@@ -517,3 +543,11 @@ class VoiceNoteRecorderWidget(QWidget):
             self._recorder.error_occurred.disconnect()
             self._recorder = None
         self._blink_timer.stop()
+        # Reset buttons
+        self.stop_btn.show()
+        self.send_btn.hide()
+        self.send_btn.setEnabled(False)
+        self._temp_file = None
+        self.recording_dot.setText("●")
+        self.recording_dot.setStyleSheet("color: #ef4444; font-size: 20px; font-weight: bold;")
+        self.status_label.setText("Recording...")

@@ -1,4 +1,3 @@
-
 import sys
 
 from PySide6.QtWidgets import (
@@ -7,6 +6,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from ui.windows.login_window import LoginWindow
 from ui.windows.register_window import RegisterWindow
 from ui.windows.authentication_window import AuthenticationWindow
 from ui.windows.main_window import MainWindow
@@ -67,61 +67,91 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Secure Messenger")
 
-    # ==================================
-    # CHECK REGISTRATION
-    # ==================================
+    while True:
+        # ==================================
+        # LOGIN WINDOW
+        # ==================================
 
-    if not CONFIG_PATH.exists():
-        open_registration()
-        return 0
+        login_window = LoginWindow()
+        login_result = login_window.exec()
 
-    if not MODEL_PATH.exists() or not LABEL_PATH.exists():
-        open_registration()
-        return 0
+        if login_result != QDialog.DialogCode.Accepted:
+            # User cancelled login (closed window)
+            return 0
 
-    # ==================================
-    # USB VERIFICATION
-    # ==================================
+        authenticated_user = login_window.authenticated_user
+        if not authenticated_user:
+            continue
 
-    try:
-        dongle_result = verify_dongle()
+        username = authenticated_user.username
 
-    except Exception as error:
-        QMessageBox.critical(
-            None,
-            "USB Verification Error",
-            str(error)
-        )
-        return 1
+        # ==================================
+        # CHECK DEVICE REGISTRATION
+        # ==================================
 
-    if not dongle_result["valid"]:
+        if not CONFIG_PATH.exists():
+            QMessageBox.warning(
+                None,
+                "Device Not Registered",
+                "USB Dongle belum didaftarkan. Silakan daftarkan perangkat terlebih dahulu."
+            )
+            open_registration()
+            continue
 
-        ask_registration(dongle_result["message"])
-        return 0
+        if not MODEL_PATH.exists() or not LABEL_PATH.exists():
+            QMessageBox.warning(
+                None,
+                "Face Model Not Found",
+                "Model pengenalan wajah belum tersedia. Silakan daftarkan wajah terlebih dahulu."
+            )
+            open_registration()
+            continue
 
-    # ==================================
-    # FACE VERIFICATION
-    # ==================================
+        # ==================================
+        # USB VERIFICATION
+        # ==================================
 
-    authentication = AuthenticationWindow()
+        try:
+            dongle_result = verify_dongle()
 
-    if authentication.exec() != QDialog.DialogCode.Accepted:
+        except Exception as error:
+            QMessageBox.critical(
+                None,
+                "USB Verification Error",
+                str(error)
+            )
+            # Offer to re-register
+            ask_registration(str(error))
+            continue
 
-        ask_registration(
-            "Face verification failed or was cancelled."
-        )
-        return 0
+        if not dongle_result["valid"]:
+            ask_registration(dongle_result["message"])
+            continue
 
-    # ==================================
-    # OPEN MAIN WINDOW
-    # ==================================
+        # ==================================
+        # FACE VERIFICATION
+        # ==================================
 
-    username = authentication.authenticated_name
+        authentication = AuthenticationWindow()
 
-    window = MainWindow(username)
-    window.show()
+        if authentication.exec() != QDialog.DialogCode.Accepted:
+            ask_registration(
+                "Face verification failed or was cancelled."
+            )
+            continue
 
-    return app.exec()
+        # ==================================
+        # OPEN MAIN WINDOW
+        # ==================================
+
+        # The authenticated_name from face verification should match
+        # the display_name on the USB dongle
+        display_name = authentication.authenticated_name
+
+        window = MainWindow(username)
+        window.show()
+
+        return app.exec()
 
 
 if __name__ == "__main__":
