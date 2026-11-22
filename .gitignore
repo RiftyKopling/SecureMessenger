@@ -2,3 +2,7 @@ env/
 dataset/
 config.json
 trainer.yml
+CLAUDE.md
+penjelasan_proyek.md
+AGENTS.md
+PROTOCOL.md
