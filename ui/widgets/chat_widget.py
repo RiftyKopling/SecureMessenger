@@ -10,13 +10,16 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QFileDialog,
 )
+
 from PySide6.QtCore import Qt, Signal
 
 from ui.widgets.message_bubble import MessageBubble
 
 
 class ChatWidget(QWidget):
+
     file_selected = Signal(str)
+    file_download_requested = Signal(str)
     message_sent = Signal(str)
 
     def __init__(self, parent=None):
@@ -25,6 +28,10 @@ class ChatWidget(QWidget):
         self.current_contact = None
 
         self.init_ui()
+
+    # ==================================
+    # USER INTERFACE
+    # ==================================
 
     def init_ui(self):
 
@@ -49,7 +56,9 @@ class ChatWidget(QWidget):
         self.contact_name = QLabel("Select a contact")
         self.contact_name.setObjectName("contactName")
 
-        self.contact_status = QLabel("●  Waiting for connection")
+        self.contact_status = QLabel(
+            "●  Waiting for connection"
+        )
         self.contact_status.setObjectName("contactStatus")
 
         contact_info.addWidget(self.contact_name)
@@ -72,6 +81,7 @@ class ChatWidget(QWidget):
         self.chat_scroll = QScrollArea()
         self.chat_scroll.setObjectName("chatScroll")
         self.chat_scroll.setWidgetResizable(True)
+
         self.chat_scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
@@ -81,6 +91,7 @@ class ChatWidget(QWidget):
         self.message_layout = QVBoxLayout(self.chat_content)
         self.message_layout.setContentsMargins(30, 25, 30, 25)
         self.message_layout.setSpacing(15)
+
         self.message_layout.addStretch()
 
         self.chat_scroll.setWidget(self.chat_content)
@@ -98,7 +109,7 @@ class ChatWidget(QWidget):
         input_layout.setContentsMargins(25, 18, 25, 18)
         input_layout.setSpacing(12)
 
-        # Attach File Button
+        # ATTACH BUTTON
 
         attach_button = QPushButton("📎 Attach")
         attach_button.setObjectName("attachButton")
@@ -108,7 +119,7 @@ class ChatWidget(QWidget):
             self.select_file
         )
 
-        # Message Input
+        # MESSAGE INPUT
 
         self.message_input = QLineEdit()
         self.message_input.setObjectName("messageInput")
@@ -121,7 +132,7 @@ class ChatWidget(QWidget):
             self.send_message
         )
 
-        # Send Button
+        # SEND BUTTON
 
         send_button = QPushButton("Send  ➤")
         send_button.setObjectName("sendButton")
@@ -142,7 +153,11 @@ class ChatWidget(QWidget):
         # ==================================
 
         self.setStyleSheet("""
-            
+
+            QWidget {
+                background-color: #0b1120;
+            }
+
             QPushButton#attachButton {
                 background-color: #172c45;
                 color: #60a5fa;
@@ -154,10 +169,6 @@ class ChatWidget(QWidget):
 
             QPushButton#attachButton:hover {
                 background-color: #203b5c;
-            }
-
-            QWidget {
-                background-color: #0b1120;
             }
 
             QFrame#chatHeader {
@@ -243,6 +254,42 @@ class ChatWidget(QWidget):
                 background-color: #3b82f6;
             }
 
+            QFrame#fileBubble {
+                background-color: #1a2940;
+                border: 1px solid #304563;
+                border-radius: 12px;
+            }
+
+            QLabel#fileName {
+                color: #f1f5f9;
+                font-size: 13px;
+                font-weight: bold;
+            }
+
+            QLabel#fileSize {
+                color: #94a3b8;
+                font-size: 11px;
+            }
+
+            QPushButton#downloadButton {
+                background-color: #2563eb;
+                color: white;
+                border: none;
+                border-radius: 7px;
+                padding: 8px 14px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+
+            QPushButton#downloadButton:hover {
+                background-color: #3b82f6;
+            }
+
+            QLabel#fileStatus {
+                color: #93c5fd;
+                font-size: 10px;
+            }
+
         """)
 
     # ==================================
@@ -252,15 +299,25 @@ class ChatWidget(QWidget):
     def set_contact(self, name):
 
         self.current_contact = name
-        self.contact_name.setText(name)
-        self.contact_status.setText("●  Demo conversation")
+
+        if name:
+            self.contact_name.setText(name)
+            self.contact_status.setText(
+                "●  Waiting for connection"
+            )
+        else:
+            self.contact_name.setText("Select a contact")
+            self.contact_status.setText(
+                "●  Waiting for connection"
+            )
 
         self.clear_messages()
 
-        self.add_message(
-            f"Percakapan dengan {name} dimulai.",
-            outgoing=False
-        )
+        if name:
+            self.add_message(
+                f"Percakapan dengan {name} dimulai.",
+                outgoing=False
+            )
 
     # ==================================
     # MESSAGE MANAGEMENT
@@ -278,6 +335,14 @@ class ChatWidget(QWidget):
 
         self.message_layout.addStretch()
 
+    def scroll_to_bottom(self):
+
+        scrollbar = self.chat_scroll.verticalScrollBar()
+
+        scrollbar.setValue(
+            scrollbar.maximum()
+        )
+
     def add_message(self, text, outgoing=False):
 
         bubble = MessageBubble(
@@ -290,8 +355,131 @@ class ChatWidget(QWidget):
             bubble
         )
 
-        scrollbar = self.chat_scroll.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        self.scroll_to_bottom()
+
+    # ==================================
+    # FILE MESSAGE BUBBLE
+    # ==================================
+
+    def add_file_message(
+        self,
+        file_id,
+        file_name,
+        file_size,
+        outgoing=False
+    ):
+
+        container = QWidget()
+
+        outer_layout = QHBoxLayout(container)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Pengirim di kanan
+        if outgoing:
+            outer_layout.addStretch()
+
+        # Bubble file
+        bubble = QFrame()
+        bubble.setObjectName("fileBubble")
+        bubble.setMaximumWidth(340)
+
+        bubble_layout = QVBoxLayout(bubble)
+        bubble_layout.setContentsMargins(14, 12, 14, 12)
+        bubble_layout.setSpacing(9)
+
+        # Informasi file
+        info_layout = QHBoxLayout()
+        info_layout.setSpacing(10)
+
+        extension = file_name.rsplit(".", 1)[-1].upper()
+
+        if "." not in file_name:
+            extension = "FILE"
+
+        icon = QLabel("📄")
+        icon.setStyleSheet("font-size: 28px;")
+
+        details = QVBoxLayout()
+        details.setSpacing(4)
+
+        name_label = QLabel(file_name)
+        name_label.setObjectName("fileName")
+        name_label.setWordWrap(True)
+
+        size_label = QLabel(
+            self.format_file_size(file_size)
+        )
+        size_label.setObjectName("fileSize")
+
+        details.addWidget(name_label)
+        details.addWidget(size_label)
+
+        info_layout.addWidget(icon)
+        info_layout.addLayout(details, 1)
+
+        bubble_layout.addLayout(info_layout)
+
+        # Tombol download hanya untuk file masuk
+        if not outgoing and file_id:
+
+            download_button = QPushButton(
+                "⬇  Download"
+            )
+            download_button.setObjectName(
+                "downloadButton"
+            )
+
+            download_button.clicked.connect(
+                lambda checked=False, fid=file_id:
+                    self.file_download_requested.emit(fid)
+            )
+
+            bubble_layout.addWidget(download_button)
+
+            status = QLabel("File diterima")
+
+        else:
+
+            status = QLabel("File terkirim")
+
+        status.setObjectName("fileStatus")
+
+        bubble_layout.addWidget(status)
+
+        outer_layout.addWidget(bubble)
+
+        # Penerima di kiri
+        if not outgoing:
+            outer_layout.addStretch()
+
+        self.message_layout.insertWidget(
+            self.message_layout.count() - 1,
+            container
+        )
+
+        self.scroll_to_bottom()
+
+    # ==================================
+    # FILE SIZE FORMAT
+    # ==================================
+
+    @staticmethod
+    def format_file_size(size):
+
+        if size < 1024:
+            return f"{size} B"
+
+        if size < 1024 * 1024:
+            return f"{size / 1024:.1f} KB"
+
+        if size < 1024 * 1024 * 1024:
+            return f"{size / (1024 * 1024):.1f} MB"
+
+        return f"{size / (1024 * 1024 * 1024):.1f} GB"
+
+    # ==================================
+    # SEND MESSAGE
+    # ==================================
 
     def send_message(self):
 
@@ -300,7 +488,10 @@ class ChatWidget(QWidget):
         if not text or not self.current_contact:
             return
 
-        self.add_message(text, outgoing=True)
+        self.add_message(
+            text,
+            outgoing=True
+        )
 
         self.message_input.clear()
 
