@@ -118,7 +118,7 @@ def main():
 
     username = authentication.authenticated_name
 
-    window = MainWindow(username="Bob")
+    window = MainWindow(username)
     window.show()
 
     return app.exec()

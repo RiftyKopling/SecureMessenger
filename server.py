@@ -374,6 +374,76 @@ def handle_client(client_socket, address):
                         })
 
                 # ==================================
+                # SEND ENCRYPTED FILE
+                # ==================================
+
+                elif request_type == "file":
+
+                    if username is None:
+                        send_json(client, {
+                            "type": "error",
+                            "message": "Register before sending files"
+                        })
+                        continue
+
+                    recipient = request.get("recipient")
+                    ciphertext = request.get("ciphertext")
+
+                    if (
+                        not isinstance(recipient, str)
+                        or not recipient.strip()
+                    ):
+                        send_json(client, {
+                            "type": "error",
+                            "message": "Invalid file recipient"
+                        })
+                        continue
+
+                    if (
+                        not isinstance(ciphertext, str)
+                        or not ciphertext.startswith("SF1:")
+                        or len(ciphertext) > 1_000_000
+                    ):
+                        send_json(client, {
+                            "type": "error",
+                            "message": "Invalid encrypted file"
+                        })
+                        continue
+
+                    with clients_lock:
+                        recipient_client = clients.get(recipient)
+
+                    if recipient_client is None:
+                        send_json(client, {
+                            "type": "error",
+                            "message": f"{recipient} is offline"
+                        })
+                        continue
+
+                    try:
+                        send_json(recipient_client, {
+                            "type": "file",
+                            "sender": username,
+                            "ciphertext": ciphertext
+                        })
+
+                        send_json(client, {
+                            "type": "file_sent",
+                            "recipient": recipient
+                        })
+
+                        print(
+                            f"[FILE] {username} -> {recipient} "
+                            f"({len(ciphertext)} encrypted characters)"
+                        )
+
+                    except OSError:
+                        send_json(client, {
+                            "type": "error",
+                            "message": "Failed to deliver file"
+                        })
+
+                # ==================================
                 # UNKNOWN REQUEST
                 # ==================================
 

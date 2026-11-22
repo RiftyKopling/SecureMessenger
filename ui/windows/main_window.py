@@ -10,10 +10,13 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QFrame,
     QMessageBox,
+    QFileDialog,
 )
+from pathlib import Path
 from PySide6.QtCore import Qt
 from network.server_config import load_server_config
 from security.encryption import TextEncryption
+from security.file_encryption import FileEncryption
 from network.client import MessengerClient
 from database.db import save_message, get_conversation
 from ui.widgets.chat_widget import ChatWidget
@@ -26,6 +29,7 @@ class MainWindow(QMainWindow):
 
         self.username = username
         self.text_encryption = TextEncryption()
+        self.file_encryption = FileEncryption()
 
         # Penyimpanan sementara pesan
         self.encrypted_messages = []
@@ -55,6 +59,14 @@ class MainWindow(QMainWindow):
 
         self.network_client.message_received.connect(
             self.handle_message_received
+        )
+
+        self.network_client.file_received.connect(
+            self.handle_file_received
+        )
+
+        self.network_client.file_sent.connect(
+            self.handle_file_delivered
         )
 
         self.network_client.message_sent.connect(
@@ -334,6 +346,10 @@ class MainWindow(QMainWindow):
             self.handle_message_sent
         )
 
+        self.chat_widget.file_selected.connect(
+            self.handle_file_selected
+        )
+
         # ==================================
         # MAIN LAYOUT
         # ==================================
@@ -466,7 +482,7 @@ class MainWindow(QMainWindow):
 
 
     def handle_users_updated(self, users):
-
+        print("[DEBUG MAIN WINDOW] Users received:", users)
         current_contact = self.chat_widget.current_contact
 
         self.contact_list.blockSignals(True)
@@ -499,6 +515,18 @@ class MainWindow(QMainWindow):
             ):
                 selected_item = item
 
+        print(
+            "[DEBUG MAIN WINDOW] Contact list count:",
+            self.contact_list.count()
+        )
+
+        for index in range(self.contact_list.count()):
+
+            print(
+                "[DEBUG MAIN WINDOW] Contact:",
+                self.contact_list.item(index).text()
+            )
+        
         self.contact_list.blockSignals(False)
 
         # Jika kontak yang sebelumnya dibuka masih online,
@@ -845,3 +873,122 @@ class MainWindow(QMainWindow):
             self.network_client.disconnect_from_server()
 
         event.accept()
+
+    def handle_file_selected(self, file_path):
+
+        recipient = self.chat_widget.current_contact
+
+        if not recipient:
+            QMessageBox.warning(
+                self,
+                "Pilih Kontak",
+                "Pilih kontak terlebih dahulu sebelum mengirim file."
+            )
+            return
+
+        try:
+            if not self.network_client.running:
+                raise ConnectionError("Belum terhubung ke server.")
+
+            shared_key = self.network_client.get_shared_key(recipient)
+
+            if shared_key is None:
+                raise ConnectionError(
+                    f"Shared key dengan {recipient} belum tersedia. "
+                    "Tunggu pertukaran kunci selesai."
+                )
+
+            file_name = Path(file_path).name
+
+            # Enkripsi file menggunakan ChaCha20-Poly1305.
+            encrypted_file = self.file_encryption.encrypt_file(
+                file_path,
+                shared_key
+            )
+
+            # Kirim ciphertext melalui protokol file, bukan protokol pesan teks.
+            success = self.network_client.send_file(
+                recipient,
+                encrypted_file
+            )
+
+            if not success:
+                raise ConnectionError("File gagal dikirim ke server.")
+
+            self.chat_widget.add_message(
+                f"📎 File dikirim: {file_name}",
+                outgoing=True
+            )
+
+            print(
+                f"[FILE] Encrypted file sent to {recipient}: {file_name}"
+            )
+
+        except Exception as error:
+            QMessageBox.warning(
+                self,
+                "File Error",
+                f"Gagal mengirim file:\n{error}"
+            )
+
+    def handle_file_received(self, sender, ciphertext):
+
+        try:
+            shared_key = self.network_client.get_shared_key(sender)
+
+            if shared_key is None:
+                raise ValueError(
+                    f"Shared key dengan {sender} belum tersedia."
+                )
+
+            # Dekripsi dan autentikasi ciphertext file.
+            file_name, file_data = self.file_encryption.decrypt_file(
+                ciphertext,
+                shared_key
+            )
+
+            if sender == self.chat_widget.current_contact:
+                self.chat_widget.add_message(
+                    f"📎 File diterima: {file_name}",
+                    outgoing=False
+                )
+
+            save_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Simpan File yang Diterima",
+                file_name,
+                "All Files (*.*)"
+            )
+
+            if not save_path:
+                print(
+                    f"[FILE] File from {sender} decrypted but not saved."
+                )
+                return
+
+            Path(save_path).write_bytes(file_data)
+
+            QMessageBox.information(
+                self,
+                "File Berhasil Diterima",
+                f"File dari {sender} berhasil didekripsi dan disimpan:\n"
+                f"{save_path}"
+            )
+
+            print(
+                f"[FILE] File received from {sender} and saved: {save_path}"
+            )
+
+        except Exception as error:
+            print(f"[FILE DECRYPTION ERROR] {error}")
+            QMessageBox.warning(
+                self,
+                "File Decryption Error",
+                f"Gagal menerima atau mendekripsi file dari {sender}:\n{error}"
+            )
+
+    def handle_file_delivered(self, recipient):
+
+        print(
+            f"[NETWORK] Encrypted file successfully forwarded to {recipient}"
+        )

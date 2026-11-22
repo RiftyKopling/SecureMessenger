@@ -27,6 +27,9 @@ class MessengerClient(QObject):
     message_received = Signal(str, str)
     message_sent = Signal(str)
 
+    file_received = Signal(str, str)
+    file_sent = Signal(str)
+
     public_key_received = Signal(str, str)
     key_established = Signal(str)
 
@@ -326,6 +329,30 @@ class MessengerClient(QObject):
         })
 
     # ==================================
+    # SEND ENCRYPTED FILE
+    # ==================================
+
+    def send_file(self, recipient, encrypted_file):
+
+        if not isinstance(recipient, str) or not recipient.strip():
+            self.error_occurred.emit("Invalid recipient.")
+            return False
+
+        if (
+            not isinstance(encrypted_file, str)
+            or not encrypted_file.startswith("SF1:")
+            or len(encrypted_file) > 1_000_000
+        ):
+            self.error_occurred.emit("Invalid encrypted file.")
+            return False
+
+        return self.send_json({
+            "type": "file",
+            "recipient": recipient,
+            "ciphertext": encrypted_file
+        })
+
+    # ==================================
     # RECEIVE MESSAGES
     # ==================================
 
@@ -441,9 +468,24 @@ class MessengerClient(QObject):
 
             self.message_sent.emit(recipient)
 
+        elif response_type == "file":
+
+            sender = response.get("sender", "")
+            ciphertext = response.get("ciphertext", "")
+
+            if isinstance(sender, str) and isinstance(ciphertext, str):
+                self.file_received.emit(sender, ciphertext)
+
+        elif response_type == "file_sent":
+
+            recipient = response.get("recipient", "")
+            self.file_sent.emit(recipient)
+
         elif response_type == "users":
-        
+
             users = response.get("users", [])
+
+            print("[DEBUG CLIENT] Received users:", users)
 
             if isinstance(users, list):
 
@@ -452,6 +494,8 @@ class MessengerClient(QObject):
                     for user in users
                     if isinstance(user, str)
                 ]
+
+                print("[DEBUG CLIENT] Emitting users:", valid_users)
 
                 self.users_updated.emit(valid_users)
 

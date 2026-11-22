@@ -17,3 +17,5 @@ data/*.db-wal
 .idea/
 
 models
+
+config/device_config.json

@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QFrame,
     QScrollArea,
+    QFileDialog,
 )
 from PySide6.QtCore import Qt, Signal
 
@@ -15,7 +16,7 @@ from ui.widgets.message_bubble import MessageBubble
 
 
 class ChatWidget(QWidget):
-
+    file_selected = Signal(str)
     message_sent = Signal(str)
 
     def __init__(self, parent=None):
@@ -97,6 +98,18 @@ class ChatWidget(QWidget):
         input_layout.setContentsMargins(25, 18, 25, 18)
         input_layout.setSpacing(12)
 
+        # Attach File Button
+
+        attach_button = QPushButton("📎 Attach")
+        attach_button.setObjectName("attachButton")
+        attach_button.setFixedSize(90, 48)
+
+        attach_button.clicked.connect(
+            self.select_file
+        )
+
+        # Message Input
+
         self.message_input = QLineEdit()
         self.message_input.setObjectName("messageInput")
         self.message_input.setPlaceholderText(
@@ -108,11 +121,17 @@ class ChatWidget(QWidget):
             self.send_message
         )
 
+        # Send Button
+
         send_button = QPushButton("Send  ➤")
         send_button.setObjectName("sendButton")
         send_button.setFixedSize(105, 48)
-        send_button.clicked.connect(self.send_message)
 
+        send_button.clicked.connect(
+            self.send_message
+        )
+
+        input_layout.addWidget(attach_button)
         input_layout.addWidget(self.message_input)
         input_layout.addWidget(send_button)
 
@@ -123,6 +142,19 @@ class ChatWidget(QWidget):
         # ==================================
 
         self.setStyleSheet("""
+            
+            QPushButton#attachButton {
+                background-color: #172c45;
+                color: #60a5fa;
+                border: 1px solid #29466b;
+                border-radius: 9px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+
+            QPushButton#attachButton:hover {
+                background-color: #203b5c;
+            }
 
             QWidget {
                 background-color: #0b1120;
@@ -273,3 +305,24 @@ class ChatWidget(QWidget):
         self.message_input.clear()
 
         self.message_sent.emit(text)
+
+    # ==================================
+    # FILE SELECTION
+    # ==================================
+
+    def select_file(self):
+
+        if not self.current_contact:
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select File to Send",
+            "",
+            "All Files (*.*)"
+        )
+
+        if not file_path:
+            return
+
+        self.file_selected.emit(file_path)
