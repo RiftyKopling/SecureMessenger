@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QMessageBox,
     QFileDialog,
+    QPushButton,
 )
 
 from PySide6.QtCore import Qt
