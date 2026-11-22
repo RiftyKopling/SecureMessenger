@@ -919,7 +919,7 @@ class MainWindow(QMainWindow):
                 file_id = str(message["id"])
                 ciphertext = message["ciphertext"]
 
-                file_name, file_data = FileEncryption.decrypt_file(
+                file_name, file_data = self.file_encryption.decrypt_file(
                     ciphertext,
                     shared_key
                 )
