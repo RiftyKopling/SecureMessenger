@@ -377,6 +377,9 @@ class MainWindow(QMainWindow):
         self.chat_widget.voice_note_play_requested.connect(
             self.handle_voice_note_play
         )
+        self.chat_widget.voice_note_seek_requested.connect(
+            self.handle_voice_note_seek
+        )
         self.chat_widget.voice_note_download_requested.connect(
             self.handle_voice_note_download
         )
@@ -562,6 +565,7 @@ class MainWindow(QMainWindow):
         else:
 
             self.chat_widget.set_contact(None)
+            self._stop_all_voice_players()
             self.chat_widget.clear_messages()
 
             self.chat_widget.add_message(
@@ -612,6 +616,7 @@ class MainWindow(QMainWindow):
                 contact
             )
 
+            self._stop_all_voice_players()
             self.chat_widget.clear_messages()
 
             shared_key = self.network_client.get_shared_key(
@@ -1326,21 +1331,22 @@ class MainWindow(QMainWindow):
 
             print(f"[DATABASE] Outgoing voice note saved. ID: {media_id}")
 
+            file_id_str = str(media_id)
+            self.pending_downloads[file_id_str] = {
+                "sender": self.username,
+                "recipient": recipient,
+                "file_name": file_name,
+                "decrypted_path": temp_file_path,
+                "ciphertext": encrypted_file
+            }
+
             # Show in chat
-            # For duration, we'll use a placeholder and update when played
-            # Actual duration should be read from audio file
             self.chat_widget.add_voice_note_message(
-                str(media_id),
+                file_id_str,
                 file_name,
                 0,  # Duration will be updated on playback
                 outgoing=True
             )
-
-            # Clean up temp file
-            try:
-                Path(temp_file_path).unlink(missing_ok=True)
-            except Exception:
-                pass
 
             QMessageBox.information(
                 self,
@@ -1365,141 +1371,191 @@ class MainWindow(QMainWindow):
 
     def handle_voice_note_play(self, file_id: str):
         """Handle play/pause request for a voice note."""
-        file_info = self.pending_downloads.get(str(file_id))
-        
-        if not file_info:
-            # Try to load from database
-            self._load_voice_note_for_playback(file_id)
+        file_id_str = str(file_id)
+        from PySide6.QtMultimedia import QMediaPlayer
+
+        # If already loaded in _voice_players, toggle playback
+        if hasattr(self, '_voice_players') and file_id_str in self._voice_players:
+            p_data = self._voice_players[file_id_str]
+            player = p_data["player"]
+            if player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                player.pause()
+                self.chat_widget.update_voice_note_bubble(file_id_str, playing=False)
+            else:
+                # Pause any other voice notes
+                for pid, p in self._voice_players.items():
+                    if pid != file_id_str and p["player"].playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                        p["player"].pause()
+                        self.chat_widget.update_voice_note_bubble(pid, playing=False)
+                player.play()
+                self.chat_widget.update_voice_note_bubble(file_id_str, playing=True)
             return
 
-        # We have the ciphertext, need to decrypt and play
-        self._play_voice_note(file_id, file_info)
+        file_info = self.pending_downloads.get(file_id_str)
+        if not file_info or not file_info.get("decrypted_path") or not Path(file_info.get("decrypted_path")).exists():
+            self._load_voice_note_for_playback(file_id_str)
+            return
 
-    def _load_voice_note_for_playback(self, file_id: str):
-        """Load voice note from database for playback."""
+        self._play_voice_note(file_id_str, file_info)
+
+    def handle_voice_note_seek(self, file_id: str, position_ms: int):
+        """Handle seeking to position in a voice note."""
+        file_id_str = str(file_id)
+        if hasattr(self, '_voice_players') and file_id_str in self._voice_players:
+            player = self._voice_players[file_id_str]["player"]
+            player.setPosition(position_ms)
+        else:
+            file_info = self.pending_downloads.get(file_id_str)
+            if not file_info or not file_info.get("decrypted_path") or not Path(file_info.get("decrypted_path")).exists():
+                self._load_voice_note_for_playback(file_id_str, initial_seek_ms=position_ms)
+            else:
+                self._play_voice_note(file_id_str, file_info, initial_seek_ms=position_ms)
+
+    def _load_voice_note_for_playback(self, file_id: str, initial_seek_ms: int = None):
+        """Load voice note from database or pending_downloads for playback."""
+        file_id_str = str(file_id)
         try:
-            from database.db import get_media_conversation
-            
-            # We need to find the message by ID
-            # Since we don't have a direct get by ID, search in conversation
-            contact = self.chat_widget.current_contact
-            if not contact:
-                return
-                
-            messages = get_media_conversation(self.username, contact)
-            
-            for msg in messages:
-                if str(msg["id"]) == str(file_id):
-                    # Found it, decrypt and play
-                    shared_key = self.network_client.get_shared_key(
-                        msg["sender"] if msg["sender"] != self.username else msg["recipient"]
-                    )
-                    
-                    if not shared_key:
-                        self.chat_widget.update_voice_note_bubble(
-                            file_id, status="Shared key not available"
-                        )
-                        return
-                    
-                    file_name, file_data = self.file_encryption.decrypt_file(
-                        msg["ciphertext"],
-                        shared_key
-                    )
-                    
-                    # Save decrypted to temp file for playback
-                    import tempfile
-                    temp_dir = Path(tempfile.gettempdir())
-                    temp_file = temp_dir / f"vn_play_{file_id}_{file_name}"
-                    temp_file.write_bytes(file_data)
-                    
-                    self.pending_downloads[file_id] = {
-                        "sender": msg["sender"],
-                        "recipient": msg["recipient"],
-                        "file_name": file_name,
-                        "decrypted_path": str(temp_file),
-                        "ciphertext": msg["ciphertext"]
-                    }
-                    
-                    self._play_voice_note(file_id, self.pending_downloads[file_id])
+            file_info = self.pending_downloads.get(file_id_str)
+            ciphertext = None
+            sender = None
+            recipient = None
+            file_name = None
+
+            if file_info and "ciphertext" in file_info:
+                ciphertext = file_info["ciphertext"]
+                sender = file_info.get("sender")
+                recipient = file_info.get("recipient")
+                file_name = file_info.get("file_name", f"voice_note_{file_id_str}.wav")
+            else:
+                contact = self.chat_widget.current_contact
+                if not contact:
                     return
-            
-            self.chat_widget.update_voice_note_bubble(
-                file_id, status="Voice note not found"
+                from database.db import get_media_conversation
+                messages = get_media_conversation(self.username, contact)
+                for msg in messages:
+                    if str(msg["id"]) == file_id_str:
+                        ciphertext = msg["ciphertext"]
+                        sender = msg["sender"]
+                        recipient = msg["recipient"]
+                        file_name = msg["filename"]
+                        break
+
+            if not ciphertext:
+                self.chat_widget.update_voice_note_bubble(
+                    file_id_str, status="Voice note not found"
+                )
+                return
+
+            other_party = sender if sender != self.username else recipient
+            shared_key = self.network_client.get_shared_key(other_party)
+            if not shared_key:
+                self.chat_widget.update_voice_note_bubble(
+                    file_id_str, status="Shared key not available"
+                )
+                return
+
+            file_name_dec, file_data = self.file_encryption.decrypt_file(
+                ciphertext,
+                shared_key
             )
-            
+
+            import tempfile
+            temp_dir = Path(tempfile.gettempdir())
+            temp_file = temp_dir / f"vn_play_{file_id_str}_{file_name_dec}"
+            temp_file.write_bytes(file_data)
+
+            self.pending_downloads[file_id_str] = {
+                "sender": sender,
+                "recipient": recipient,
+                "file_name": file_name_dec,
+                "decrypted_path": str(temp_file),
+                "ciphertext": ciphertext
+            }
+
+            self._play_voice_note(file_id_str, self.pending_downloads[file_id_str], initial_seek_ms=initial_seek_ms)
+
         except Exception as e:
             print(f"[VOICE NOTE LOAD ERROR] {e}")
             self.chat_widget.update_voice_note_bubble(
-                file_id, status=f"Error: {e}"
+                file_id_str, status=f"Error: {e}"
             )
 
-    def _play_voice_note(self, file_id: str, file_info: dict):
+    def _play_voice_note(self, file_id: str, file_info: dict, initial_seek_ms: int = None):
         """Play a voice note using Qt Multimedia."""
+        file_id_str = str(file_id)
         from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
         from PySide6.QtCore import QUrl
         
         decrypted_path = file_info.get("decrypted_path")
         if not decrypted_path or not Path(decrypted_path).exists():
             self.chat_widget.update_voice_note_bubble(
-                file_id, status="File not available"
+                file_id_str, status="File not available"
             )
             return
-        
-        # Create player for this voice note
-        player = QMediaPlayer()
-        audio_output = QAudioOutput()
-        player.setAudioOutput(audio_output)
-        player.setSource(QUrl.fromLocalFile(decrypted_path))
-        
-        # Store player reference
+
         if not hasattr(self, '_voice_players'):
             self._voice_players = {}
-        
-        # Stop any currently playing voice note
+
+        if file_id_str in self._voice_players:
+            player = self._voice_players[file_id_str]["player"]
+        else:
+            player = QMediaPlayer(self)
+            audio_output = QAudioOutput(self)
+            player.setAudioOutput(audio_output)
+            player.setSource(QUrl.fromLocalFile(decrypted_path))
+
+            self._voice_players[file_id_str] = {
+                "player": player,
+                "audio_output": audio_output,
+                "file_info": file_info
+            }
+
+            def make_pos_handler(fid):
+                return lambda pos: self.chat_widget.update_voice_note_bubble(fid, position_ms=pos)
+
+            def make_dur_handler(fid):
+                return lambda dur: self.chat_widget.update_voice_note_bubble(fid, duration_ms=dur)
+
+            def make_state_handler(fid, plyr):
+                def on_state(state):
+                    is_playing = (state == QMediaPlayer.PlaybackState.PlayingState)
+                    self.chat_widget.update_voice_note_bubble(fid, playing=is_playing)
+                    if state == QMediaPlayer.PlaybackState.StoppedState:
+                        if plyr.position() >= max(0, plyr.duration() - 500):
+                            self.chat_widget.update_voice_note_bubble(
+                                fid, playing=False, position_ms=0
+                            )
+                            plyr.setPosition(0)
+                return on_state
+
+            player.positionChanged.connect(make_pos_handler(file_id_str))
+            player.durationChanged.connect(make_dur_handler(file_id_str))
+            player.playbackStateChanged.connect(make_state_handler(file_id_str, player))
+
+        self.chat_widget.update_voice_note_bubble(
+            file_id_str, decrypted_path=decrypted_path
+        )
+
+        # Stop/pause other voice notes
         for pid, p in self._voice_players.items():
-            if pid != file_id and p["player"].playbackState() == 1:  # PlayingState
+            if pid != file_id_str and p["player"].playbackState() == QMediaPlayer.PlaybackState.PlayingState:
                 p["player"].pause()
                 self.chat_widget.update_voice_note_bubble(pid, playing=False)
-        
-        self._voice_players[file_id] = {
-            "player": player,
-            "audio_output": audio_output,
-            "file_info": file_info
-        }
-        
-        # Connect signals
-        def on_position_changed(pos):
-            self.chat_widget.update_voice_note_bubble(
-                file_id, position_ms=pos
-            )
-        
-        def on_duration_changed(dur):
-            self.chat_widget.update_voice_note_bubble(
-                file_id, duration_ms=dur
-            )
-        
-        def on_state_changed(state):
-            from PySide6.QtMultimedia import QMediaPlayer
-            is_playing = state == QMediaPlayer.PlaybackState.PlayingState
-            self.chat_widget.update_voice_note_bubble(
-                file_id, playing=is_playing
-            )
-            if state == QMediaPlayer.PlaybackState.StoppedState:
-                if player.position() >= player.duration() - 500:
-                    # Finished playing
-                    self.chat_widget.update_voice_note_bubble(
-                        file_id, playing=False, position_ms=0
-                    )
-        
-        player.positionChanged.connect(on_position_changed)
-        player.durationChanged.connect(on_duration_changed)
-        player.playbackStateChanged.connect(on_state_changed)
-        
-        # Check current state and toggle
-        if player.playbackState() == 1:  # PlayingState
-            player.pause()
-        else:
-            player.play()
+
+        if initial_seek_ms is not None and initial_seek_ms > 0:
+            player.setPosition(initial_seek_ms)
+
+        player.play()
+
+    def _stop_all_voice_players(self):
+        """Stop all active voice note players."""
+        if hasattr(self, '_voice_players'):
+            for pid, p in list(self._voice_players.items()):
+                try:
+                    p["player"].stop()
+                except Exception:
+                    pass
+            self._voice_players.clear()
 
     def handle_voice_note_download(self, file_id: str):
         """Handle voice note download request - same as file download."""

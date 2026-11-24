@@ -27,6 +27,7 @@ class ChatWidget(QWidget):
     voice_note_send_requested = Signal(str)     # Send recorded voice note (temp file path)
     voice_note_cancel_requested = Signal()      # Cancel recording
     voice_note_play_requested = Signal(str)     # Play voice note (file_id)
+    voice_note_seek_requested = Signal(str, int)# Seek voice note (file_id, position_ms)
     voice_note_download_requested = Signal(str) # Download voice note (file_id)
 
     def __init__(self, parent=None):
@@ -178,7 +179,7 @@ class ChatWidget(QWidget):
 
         self.recorder_widget = VoiceNoteRecorderWidget()
         self.recorder_widget.recording_finished.connect(
-            lambda path: self.voice_note_send_requested.emit(path)
+            self._on_recording_finished
         )
         self.recorder_widget.recording_cancelled.connect(
             self._on_recording_cancelled
@@ -623,6 +624,11 @@ class ChatWidget(QWidget):
         """Handle recording cancelled."""
         self._reset_input_ui()
 
+    def _on_recording_finished(self, path):
+        """Handle recording finished and send."""
+        self._reset_input_ui()
+        self.voice_note_send_requested.emit(path)
+
     def _reset_input_ui(self):
         """Reset UI to normal input state."""
         self.recorder_widget.hide()
@@ -657,6 +663,7 @@ class ChatWidget(QWidget):
         
         # Connect signals
         bubble.play_requested.connect(self.voice_note_play_requested.emit)
+        bubble.seek_requested.connect(self.voice_note_seek_requested.emit)
         bubble.download_requested.connect(self.voice_note_download_requested.emit)
 
         outer_layout.addWidget(bubble)

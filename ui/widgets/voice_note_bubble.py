@@ -6,10 +6,9 @@ Displays a voice note with play/pause, progress bar, and duration.
 
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, 
-    QLabel, QSlider, QSizePolicy, QFrame
+    QLabel, QSlider, QFrame
 )
 from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QColor, QPalette
 
 
 class VoiceNoteBubble(QWidget):
@@ -18,15 +17,16 @@ class VoiceNoteBubble(QWidget):
     
     Features:
     - Play/Pause button
-    - Progress slider
+    - Progress slider with seeking support
     - Current time / total duration
     - Waveform visualization (optional)
     - Download button for incoming (if not decrypted yet)
     """
     
     # Signals
-    play_requested = Signal(str)      # file_id - request to decrypt and play
-    download_requested = Signal(str)  # file_id - request to download file
+    play_requested = Signal(str)            # file_id - request to play/pause
+    seek_requested = Signal(str, int)       # file_id, position_ms - seek to position
+    download_requested = Signal(str)        # file_id - request to download file
 
     def __init__(self, file_id: str, file_name: str, duration_ms: int, 
                  outgoing: bool, parent=None):
@@ -37,16 +37,12 @@ class VoiceNoteBubble(QWidget):
         self.duration_ms = duration_ms
         self.outgoing = outgoing
         self._is_playing = False
+        self._is_seeking = False
         self._position_ms = 0
         self._decrypted_file_path = None
         
         self.init_ui()
         self.setup_styles()
-        
-        # Timer for updating position during playback
-        self._position_timer = QTimer()
-        self._position_timer.setInterval(100)
-        self._position_timer.timeout.connect(self._update_position_timer)
     
     def init_ui(self):
         main_layout = QHBoxLayout(self)
@@ -60,21 +56,21 @@ class VoiceNoteBubble(QWidget):
         # Bubble container
         self.bubble = QFrame()
         self.bubble.setObjectName("voiceNoteBubble")
-        self.bubble.setMaximumWidth(320)
-        self.bubble.setMinimumWidth(240)
+        self.bubble.setMaximumWidth(340)
+        self.bubble.setMinimumWidth(260)
         
         bubble_layout = QVBoxLayout(self.bubble)
-        bubble_layout.setContentsMargins(16, 14, 16, 14)
-        bubble_layout.setSpacing(10)
+        bubble_layout.setContentsMargins(14, 12, 14, 12)
+        bubble_layout.setSpacing(8)
         
         # Top row: Play button + progress + duration
         top_row = QHBoxLayout()
-        top_row.setSpacing(10)
+        top_row.setSpacing(8)
         
         # Play/Pause button
         self.play_button = QPushButton("▶")
         self.play_button.setObjectName("voicePlayButton")
-        self.play_button.setFixedSize(40, 40)
+        self.play_button.setFixedSize(38, 38)
         self.play_button.clicked.connect(self._on_play_clicked)
         top_row.addWidget(self.play_button)
         
@@ -89,21 +85,30 @@ class VoiceNoteBubble(QWidget):
         self.progress_slider.sliderMoved.connect(self._on_slider_moved)
         top_row.addWidget(self.progress_slider, 1)
         
-        # Duration labels
+        # Duration layout (current / total)
+        time_layout = QHBoxLayout()
+        time_layout.setSpacing(2)
+        
         self.current_time_label = QLabel("0:00")
         self.current_time_label.setObjectName("voiceTimeLabel")
-        self.current_time_label.setFixedWidth(45)
-        top_row.addWidget(self.current_time_label)
+        self.current_time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        time_layout.addWidget(self.current_time_label)
+        
+        self.time_divider = QLabel("/")
+        self.time_divider.setObjectName("voiceTimeDivider")
+        self.time_divider.setAlignment(Qt.AlignCenter)
+        time_layout.addWidget(self.time_divider)
         
         self.total_time_label = QLabel(self._format_time(self.duration_ms))
         self.total_time_label.setObjectName("voiceTimeLabel")
-        self.total_time_label.setFixedWidth(45)
-        top_row.addWidget(self.total_time_label)
+        self.total_time_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        time_layout.addWidget(self.total_time_label)
         
+        top_row.addLayout(time_layout)
         bubble_layout.addLayout(top_row)
         
-        # Status label (for incoming: "Tap to play" / "Downloading..." / "Ready")
-        self.status_label = QLabel("Tap to play" if not self.outgoing else "Sent")
+        # Status label (for incoming: "Tap to play" / "Playing..." / "Sent")
+        self.status_label = QLabel("Sent" if self.outgoing else "Tap to play")
         self.status_label.setObjectName("voiceStatusLabel")
         self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         bubble_layout.addWidget(self.status_label)
@@ -112,7 +117,7 @@ class VoiceNoteBubble(QWidget):
         if not self.outgoing:
             self.download_button = QPushButton("⬇  Download")
             self.download_button.setObjectName("voiceDownloadButton")
-            self.download_button.setFixedHeight(32)
+            self.download_button.setFixedHeight(30)
             self.download_button.clicked.connect(
                 lambda: self.download_requested.emit(self.file_id)
             )
@@ -190,28 +195,33 @@ class VoiceNoteBubble(QWidget):
                 border-radius: 2px;
             }}
             
-            QLabel#voiceTimeLabel {{
+            QLabel#voiceTimeLabel {
                 color: {time_color};
                 font-size: 11px;
                 font-family: "Consolas", monospace;
-            }}
+            }
+            QLabel#voiceTimeDivider {
+                color: {time_color};
+                font-size: 11px;
+                font-family: "Consolas", monospace;
+            }
             
-            QLabel#voiceStatusLabel {{
+            QLabel#voiceStatusLabel {
                 color: {status_color};
                 font-size: 11px;
-            }}
+            }
             
-            QPushButton#voiceDownloadButton {{
+            QPushButton#voiceDownloadButton {
                 background-color: {download_bg};
                 color: {text_color};
                 border: 1px solid {slider_groove};
                 border-radius: 6px;
                 font-size: 11px;
                 font-weight: bold;
-            }}
-            QPushButton#voiceDownloadButton:hover {{
+            }
+            QPushButton#voiceDownloadButton:hover {
                 background-color: {download_hover};
-            }}
+            }
         """)
     
     def _format_time(self, ms: int) -> str:
@@ -223,52 +233,36 @@ class VoiceNoteBubble(QWidget):
     
     def _on_play_clicked(self):
         """Handle play/pause button click."""
-        if self._is_playing:
-            self._pause_playback()
-        else:
-            self._start_playback()
-    
-    def _start_playback(self):
-        """Start playback - emit signal to parent to handle decryption/playback."""
-        if not self._decrypted_file_path:
-            # Need to decrypt first
+        if not self._decrypted_file_path and not self.outgoing and not self._is_playing:
             self.status_label.setText("Decrypting...")
-            self.play_requested.emit(self.file_id)
-        else:
-            self._resume_playback()
-    
-    def _resume_playback(self):
-        """Resume playback from current position."""
-        # This will be connected to the actual player in parent
         self.play_requested.emit(self.file_id)
-    
-    def _pause_playback(self):
-        """Pause playback."""
-        self.play_requested.emit(self.file_id)  # Parent handles pause
     
     def set_decrypted_file(self, file_path: str):
         """Set the decrypted file path for playback."""
         self._decrypted_file_path = file_path
-        self.status_label.setText("Ready to play")
-        if self.outgoing:
-            self.status_label.setText("Sent")
+        if not self._is_playing:
+            self.status_label.setText("Sent" if self.outgoing else "Ready to play")
     
     def set_playing(self, playing: bool):
         """Update play/pause button state."""
         self._is_playing = playing
         self.play_button.setText("⏸" if playing else "▶")
         if playing:
-            self._position_timer.start()
+            self.status_label.setText("Playing...")
         else:
-            self._position_timer.stop()
+            if self.outgoing:
+                self.status_label.setText("Sent")
+            else:
+                self.status_label.setText("Ready to play" if self._decrypted_file_path else "Tap to play")
     
     def set_position(self, position_ms: int):
         """Update playback position."""
         self._position_ms = position_ms
-        self.progress_slider.blockSignals(True)
-        self.progress_slider.setValue(position_ms)
-        self.progress_slider.blockSignals(False)
-        self.current_time_label.setText(self._format_time(position_ms))
+        if not self._is_seeking:
+            self.progress_slider.blockSignals(True)
+            self.progress_slider.setValue(position_ms)
+            self.progress_slider.blockSignals(False)
+            self.current_time_label.setText(self._format_time(position_ms))
     
     def set_duration(self, duration_ms: int):
         """Update total duration."""
@@ -276,18 +270,15 @@ class VoiceNoteBubble(QWidget):
         self.progress_slider.setRange(0, max(1, duration_ms))
         self.total_time_label.setText(self._format_time(duration_ms))
     
-    def _update_position_timer(self):
-        """Timer tick during playback - parent should update via set_position."""
-        pass  # Parent controls actual position updates
-    
     def _on_slider_pressed(self):
         """User started dragging slider."""
-        self._position_timer.stop()
+        self._is_seeking = True
     
     def _on_slider_released(self):
         """User released slider - seek to position."""
+        self._is_seeking = False
         position = self.progress_slider.value()
-        self.play_requested.emit(self.file_id)  # Parent handles seek
+        self.seek_requested.emit(self.file_id, position)
     
     def _on_slider_moved(self, position):
         """Slider moved - update time label."""
@@ -466,14 +457,26 @@ class VoiceNoteRecorderWidget(QWidget):
     def start_recording(self, recorder):
         """Start recording with given VoiceRecorder instance."""
         self._recorder = recorder
-        self._recorder.duration_updated.connect(self._on_duration_update)
-        self._recorder.recording_stopped.connect(self._on_recording_stopped)
-        self._recorder.error_occurred.connect(self._on_error)
+        try:
+            self._recorder.duration_updated.connect(self._on_duration_update)
+            self._recorder.recording_stopped.connect(self._on_recording_stopped)
+            self._recorder.error_occurred.connect(self._on_error)
+        except Exception:
+            pass
+        
+        # Reset UI state
+        self._dot_visible = True
+        self.recording_dot.setText("●")
+        self.recording_dot.setStyleSheet("color: #ef4444; font-size: 20px; font-weight: bold;")
+        self.duration_label.setText("00:00")
+        self.status_label.setText("Recording...")
+        self.stop_btn.show()
+        self.send_btn.hide()
+        self.send_btn.setEnabled(False)
+        self._temp_file = None
         
         if self._recorder.start_recording():
             self._blink_timer.start()
-            self.status_label.setText("Recording...")
-            self.send_btn.setEnabled(False)
         else:
             self._on_error("Failed to start recording")
     
@@ -538,16 +541,27 @@ class VoiceNoteRecorderWidget(QWidget):
     def _cleanup(self):
         """Clean up recorder."""
         if self._recorder:
-            self._recorder.duration_updated.disconnect()
-            self._recorder.recording_stopped.disconnect()
-            self._recorder.error_occurred.disconnect()
+            try:
+                self._recorder.duration_updated.disconnect(self._on_duration_update)
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                self._recorder.recording_stopped.disconnect(self._on_recording_stopped)
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                self._recorder.error_occurred.disconnect(self._on_error)
+            except (RuntimeError, TypeError):
+                pass
             self._recorder = None
         self._blink_timer.stop()
-        # Reset buttons
+        # Reset buttons and state
         self.stop_btn.show()
         self.send_btn.hide()
         self.send_btn.setEnabled(False)
         self._temp_file = None
+        self._dot_visible = True
         self.recording_dot.setText("●")
         self.recording_dot.setStyleSheet("color: #ef4444; font-size: 20px; font-weight: bold;")
-        self.status_label.setText("Recording...")
+        self.duration_label.setText("00:00")
+        self.status_label.setText("Ready")
